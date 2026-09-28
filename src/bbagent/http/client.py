@@ -70,6 +70,8 @@ class AuthorizedHTTPClient:
         # A transport may be injected for testing; production leaves it None.
         self._transport = transport
         self._client: Optional[httpx.AsyncClient] = None
+        # Number of requests that actually left the process — used by budgets.
+        self.request_count = 0
 
     async def __aenter__(self) -> "AuthorizedHTTPClient":
         self._client = httpx.AsyncClient(
@@ -143,6 +145,7 @@ class AuthorizedHTTPClient:
                 method, url, headers=final_headers, params=params, content=content,
             )
             elapsed_ms = (time.perf_counter() - started) * 1000.0
+            self.request_count += 1
 
         exchange = HTTPExchange(
             exchange_id=uuid.uuid4().hex,

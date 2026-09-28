@@ -41,9 +41,11 @@ program/      ProgramManager — authoritative accessor for scope, headers, acco
 scope/        ScopeEngine — the fail-closed gate every request passes
 http/         AuthorizedHTTPClient (+ token-bucket rate limiter) — only way to send
 storage/      SQLite schema, domain models, immutable EvidenceStore
-recon/        Manifest-based endpoint discovery (scope-bounded)
+recon/        Manifest discovery + attack-surface mapper (crawl, JS, extract)
+surface/      Persistent, queryable attack-surface graph (SQLite)
 detectors/    Detector/Verifier interfaces + pluggable registry + real IDOR/BOLA detector
 verification/ VerificationEngine (hypothesis→finding lifecycle) + deduplication
+planner/      Deterministic planner, capability registry, budgets, run history, LLM boundary
 review.py     Human approval state machine
 report.py     Markdown report generation from verified data + evidence
 cli.py        Conservative CLI (validate config, scope-check a URL)
@@ -237,6 +239,79 @@ GET http://127.0.0.1:8000/api/notes/note-a1
     auth-observations: identity_a=[200]; identity_b=[200]; unauthenticated=[401]
 ```
 
+## Autonomous testing planner
+
+The planner is the reasoning/orchestration layer over the attack-surface graph.
+It is **deterministic and bounded**: it queries the graph, generates and
+prioritizes candidate hypotheses, and executes only authorized tests through the
+existing verification engine — it never performs HTTP itself and never turns a
+heuristic match into a finding.
+
+Loop: `OBSERVE → GENERATE → PRIORITIZE → EXECUTE → RECORD → VERIFY → UPDATE →
+REPLAN`, stopping when no useful hypotheses remain, the budget is exhausted, the
+program forbids the next test, or the operator stops it.
+
+- **Capability registry** — describes what each detector/verifier can test. Only
+  the existing IDOR/access-control capability is registered (no new vuln classes).
+- **Prioritization** (deterministic scoring) favors endpoints with object
+  references, observed under multiple identities, with differing authorization
+  observations, that require auth, that are API endpoints, and that carry
+  parameters. A match is only a *candidate* — verification decides.
+- **Deduplication** on `target + endpoint + vuln-class + object-refs`; verified
+  hypotheses are never regenerated.
+- **Budget**: `max_requests`, `max_tests_per_endpoint`, `max_tests_per_host`,
+  `max_runtime`, concurrency — enforced, with the stop reason recorded.
+- **Run history**: each run persists id, timings, and counts (generated /
+  executed / verified / disproven / inconclusive / requests / findings).
+- **LLM boundary**: `LLMPlanner` accepts a `Reasoner` that receives *serialized
+  candidate data only* and may only reorder/annotate. It never gets the HTTP
+  client, the database, shell, or any way to execute. The core planner is
+  deterministic so the whole system is testable without an LLM.
+
+### Plan and run (Windows, against the local lab)
+
+Start the lab and populate the graph with `recon` (above), then:
+
+```powershell
+$env:BBAGENT_LAB_TOKEN_A = "tok_test_a_11111111"
+$env:BBAGENT_LAB_TOKEN_B = "tok_test_b_22222222"
+
+# Preview the prioritized hypothesis queue (no execution):
+.venv\Scripts\python.exe -m bbagent.cli --db data\lab.db plan programs\lab.yaml
+
+# Dry run: persist the planned queue, execute nothing:
+.venv\Scripts\python.exe -m bbagent.cli --db data\lab.db run programs\lab.yaml --dry-run
+
+# Execute authorized tests and verify (writes evidence + findings):
+.venv\Scripts\python.exe -m bbagent.cli --db data\lab.db run programs\lab.yaml
+```
+
+`plan` output looks like:
+
+```
+[1] HIGH
+idor — Authorization boundary
+GET http://127.0.0.1:8000/api/notes/note-a1
+Reason: object reference (json_id, path_id); multiple authorized test identities
+available; observed under multiple identity contexts; differing authorization
+observations across identities; authentication required; API endpoint
+Auth context: user_a, user_b  Expected signal: user_b receives user_a's object ...
+
+[2] HIGH
+idor — Authorization boundary
+GET http://127.0.0.1:8000/api/profile/1001
+...
+```
+
+A full `run` verifies the vulnerable notes endpoint (finding + evidence) and
+**disproves** the protected profile endpoint (owner=200, other=403 → not a
+finding, because a 200 alone is never treated as evidence):
+
+```
+generated=2 executed=2 verified=1 disproven=1 inconclusive=0 requests=4
+findings_created=1 stop=no useful hypotheses remain
+```
+
 ## Testing
 
 `pytest` covers, in unit tests (mocked transport, no sockets):
@@ -257,12 +332,18 @@ extraction, object-reference detection, dedup across runs, authentication-contex
 tracking, scope enforcement, excluded-target handling, loopback-only behavior,
 and the CLI recon → query round-trip.
 
+Plus **planner** tests (unit + lab integration): deterministic prioritization,
+hypothesis generation, dedup / verified-regeneration guard, budget enforcement,
+state transitions, verification feedback, dry-run (zero requests), the LLM
+data-only boundary, scope enforcement on execution, the protected-endpoint
+negative case, no external network, and a complete local end-to-end run.
+
 ## Roadmap (not yet implemented)
 
 - Additional detectors (XSS, SSRF, SQLi, path traversal, upload, auth, biz-logic)
-- The controlled-tool LLM brain / autonomous testing planner
+- Wiring a real LLM into the `Reasoner` boundary for prioritization/explanation
 
-The pipeline now supports: **program → authorized discovery → persistent
-attack-surface graph → queryable assets / endpoints / parameters / object-refs /
-auth-contexts**, which is the substrate an autonomous vulnerability-testing
-planner will consume next.
+The pipeline now runs: **program → authorized discovery → persistent
+attack-surface graph → deterministic planner → authorized tests via the existing
+verifier → immutable evidence → verified finding → Markdown report**, all bounded
+by scope, rate limits, budgets, and human-review gating.

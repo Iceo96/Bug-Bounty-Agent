@@ -26,15 +26,39 @@ from pathlib import Path
 from bbagent.config.loader import ProgramConfigError, load_program
 from bbagent.http.client import AuthorizedHTTPClient, RequestBlocked
 from bbagent.logging_config import configure_logging
+from bbagent.planner import PlanRunner, PlannedHypothesis, TestBudget
 from bbagent.program.manager import ProgramManager
 from bbagent.recon import AttackSurfaceMapper
 from bbagent.scope.engine import ScopeEngine
 from bbagent.storage.db import Database
+from bbagent.storage.evidence import EvidenceStore
 from bbagent.surface.store import SurfaceStore
 
 
 def _default_db() -> str:
     return os.getenv("BBAGENT_DB_PATH", "./data/bbagent.db")
+
+
+def _evidence_dir() -> str:
+    return os.getenv("BBAGENT_EVIDENCE_DIR", "./data/evidence")
+
+
+def _print_queue(queue: list[PlannedHypothesis]) -> None:
+    if not queue:
+        print("(no hypotheses)")
+        return
+    for i, ph in enumerate(queue, 1):
+        print(f"[{i}] {ph.priority.value}")
+        print(f"{ph.vulnerability_class} — {_cap_title(ph.vulnerability_class)}")
+        print(f"{ph.method} {ph.endpoint}")
+        print(f"Reason: {ph.reasoning}")
+        print(f"Auth context: {', '.join(ph.required_auth_context) or '-'}  "
+              f"Expected signal: {ph.expected_signal or '-'}")
+        print()
+
+
+def _cap_title(vuln_class: str) -> str:
+    return {"idor": "Authorization boundary"}.get(vuln_class, vuln_class)
 
 
 def _program_name(arg: str) -> str:
@@ -136,6 +160,17 @@ def main(argv: list[str] | None = None) -> int:
     p_surf.add_argument("program")
     p_surf.add_argument("--json", action="store_true")
 
+    p_plan = sub.add_parser("plan", help="Preview the prioritized hypothesis queue (no execution)")
+    p_plan.add_argument("config", help="Program config path")
+    p_plan.add_argument("--json", action="store_true")
+
+    p_run = sub.add_parser("run", help="Run the planner: execute authorized tests + verify")
+    p_run.add_argument("config", help="Program config path")
+    p_run.add_argument("--dry-run", action="store_true", help="Show planned tests; execute nothing")
+    p_run.add_argument("--max-requests", type=int, default=200)
+    p_run.add_argument("--max-per-endpoint", type=int, default=2)
+    p_run.add_argument("--max-runtime", type=float, default=120.0)
+
     args = parser.parse_args(argv)
     db_path = args.db or _default_db()
 
@@ -169,6 +204,56 @@ def main(argv: list[str] | None = None) -> int:
         except RequestBlocked as exc:
             print(f"blocked: {exc}", file=sys.stderr)
             return 1
+
+    # Planner commands.
+    if args.cmd in ("plan", "run"):
+        try:
+            program = ProgramManager.from_file(args.config)
+        except ProgramConfigError as exc:
+            print(f"error: {exc}", file=sys.stderr)
+            return 2
+        if not Path(db_path).exists():
+            print(f"error: no database at {db_path}; run 'bbagent recon' first", file=sys.stderr)
+            return 2
+        db = Database(db_path)
+        surface = SurfaceStore(db)
+        try:
+            if args.cmd == "plan":
+                runner = PlanRunner(program, db, surface)
+                queue = runner.generate()
+                if args.json:
+                    print(json.dumps([h.to_public_dict() for h in queue], indent=2))
+                else:
+                    print(f"# Plan for '{program.name}' — {len(queue)} hypothesis(es)\n")
+                    _print_queue(queue)
+                return 0
+
+            # run
+            budget = TestBudget(max_requests=args.max_requests,
+                                max_tests_per_endpoint=args.max_per_endpoint,
+                                max_runtime_seconds=args.max_runtime)
+            if args.dry_run:
+                runner = PlanRunner(program, db, surface, budget=budget)
+                summary = asyncio.run(runner.run(dry_run=True))
+                print(f"# Dry-run plan for '{program.name}' (run {summary.run_id})\n")
+                _print_queue(getattr(runner, "_dry_queue", []))
+                print(f"generated={summary.generated} (no tests executed)")
+                return 0
+
+            async def _do_run() -> int:
+                async with AuthorizedHTTPClient(program.config) as http:
+                    evidence = EvidenceStore(db, _evidence_dir())
+                    runner = PlanRunner(program, db, surface, http, evidence, budget=budget)
+                    summary = await runner.run()
+                    print(f"# Run {summary.run_id} for '{program.name}'")
+                    print(f"generated={summary.generated} executed={summary.executed} "
+                          f"verified={summary.verified} disproven={summary.disproven} "
+                          f"inconclusive={summary.inconclusive} requests={summary.requests_used}")
+                    print(f"findings_created={summary.findings_created} stop={summary.stop_reason}")
+                    return 0
+            return asyncio.run(_do_run())
+        finally:
+            db.close()
 
     # Read commands (assets/endpoints/attack-surface).
     program_name = _program_name(args.program)
