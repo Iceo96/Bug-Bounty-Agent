@@ -35,3 +35,14 @@ test_accounts:
     role: "user"
     username: "bob"
     secret_env: "BBAGENT_LAB_TOKEN_B"
+
+# Optional LLM prioritization layer. Disabled by default. When enabled and the
+# CLI is run with --llm, the LLM only reorders/explains already-scope-checked
+# candidates — it never executes tests, sees credentials, or touches the graph.
+llm:
+  enabled: false
+  provider: "anthropic"
+  model: "claude-sonnet-5-5"
+  max_candidates: 20
+  timeout_seconds: 30
+  fallback_to_deterministic: true

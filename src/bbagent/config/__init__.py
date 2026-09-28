@@ -7,6 +7,7 @@ from bbagent.config.models import (
     TestingRestrictions,
     RateLimit,
     TestAccount,
+    LLMConfig,
 )
 from bbagent.config.loader import load_program, ProgramConfigError
 
@@ -17,6 +18,7 @@ __all__ = [
     "TestingRestrictions",
     "RateLimit",
     "TestAccount",
+    "LLMConfig",
     "load_program",
     "ProgramConfigError",
 ]

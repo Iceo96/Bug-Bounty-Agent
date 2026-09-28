@@ -23,6 +23,10 @@ dev = [
     "pytest-asyncio>=0.23",
     "respx>=0.21",
 ]
+# Optional LLM reasoning backend (prioritization only). Not required to run.
+llm = [
+    "anthropic>=0.40",
+]
 
 [project.scripts]
 bbagent = "bbagent.cli:main"

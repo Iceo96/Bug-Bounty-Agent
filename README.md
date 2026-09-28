@@ -46,6 +46,7 @@ surface/      Persistent, queryable attack-surface graph (SQLite)
 detectors/    Detector/Verifier interfaces + pluggable registry + real IDOR/BOLA detector
 verification/ VerificationEngine (hypothesis→finding lifecycle) + deduplication
 planner/      Deterministic planner, capability registry, budgets, run history, LLM boundary
+llm/          LLM Reasoner adapter (prioritization only): sanitizer, strict schema, validation
 review.py     Human approval state machine
 report.py     Markdown report generation from verified data + evidence
 cli.py        Conservative CLI (validate config, scope-check a URL)
@@ -312,6 +313,65 @@ generated=2 executed=2 verified=1 disproven=1 inconclusive=0 requests=4
 findings_created=1 stop=no useful hypotheses remain
 ```
 
+## Optional LLM reasoner (prioritization only)
+
+An LLM can be plugged in to **reorder and explain** the candidate queue. It is a
+reasoning component only and is **disabled by default**.
+
+**Hard security boundary** — the LLM has NO access to HTTP, the shell, filesystem
+writes, SQLite, credentials, arbitrary URLs, or the `AuthorizedHTTPClient`. It
+receives only *sanitized* candidate data that already passed the deterministic
+planner's scope and capability checks, and it may only return a ranking. It may
+**not** create targets/URLs, execute tests, modify the graph or evidence, create
+or approve findings, or submit reports. Its response is validated against a
+strict Pydantic schema and the known candidate set:
+
+- malformed response, unknown/invented candidate, or any attempt to change a
+  `target` / `endpoint` / `method` → the response is **discarded** and the run
+  falls back to deterministic ordering (unless `fallback_to_deterministic: false`,
+  which aborts instead).
+- credentials/tokens/auth headers and sensitive fields are stripped and scrubbed
+  before anything is sent; secrets are never logged.
+
+### Setup and configuration
+
+```powershell
+# Install the optional backend:
+.venv\Scripts\python.exe -m pip install -e ".[llm]"
+
+# Provide the API key via environment (never in config; .env is git-ignored):
+$env:ANTHROPIC_API_KEY = "sk-ant-..."
+```
+
+Configure per program (defaults shown; the block is optional and starts disabled):
+
+```yaml
+llm:
+  enabled: false
+  provider: "anthropic"
+  model: "claude-sonnet-5-5"
+  max_candidates: 20
+  timeout_seconds: 30
+  fallback_to_deterministic: true
+```
+
+### Enabling / disabling
+
+- **Disabled (default):** every `plan`/`run` uses the deterministic planner.
+- **Enabled:** pass `--llm` to `plan` or `run`:
+
+```powershell
+.venv\Scripts\python.exe -m bbagent.cli --db data\lab.db plan programs\lab.yaml --llm
+.venv\Scripts\python.exe -m bbagent.cli --db data\lab.db run  programs\lab.yaml --llm
+```
+
+Flow with `--llm`: deterministic candidates → LLM prioritization → strict
+validation → execution through the **same** verification pipeline. If the API key
+or SDK is missing, the CLI warns and uses the deterministic planner (or aborts if
+fallback is disabled). Logs show the candidate count, that the LLM was requested,
+whether its response was validated or rejected, whether fallback was used, and
+the final execution order — never any secret.
+
 ## Testing
 
 `pytest` covers, in unit tests (mocked transport, no sockets):
@@ -338,10 +398,15 @@ state transitions, verification feedback, dry-run (zero requests), the LLM
 data-only boundary, scope enforcement on execution, the protected-endpoint
 negative case, no external network, and a complete local end-to-end run.
 
+Plus **LLM reasoner** tests (fake completion backend, no real API): valid
+reorder, malformed response, invented candidate, modified endpoint/target/method
+rejection, faithful-echo acceptance, `max_candidates` truncation, secret
+scrubbing + key stripping, prompt-contains-no-secrets, LLM-disabled default, and
+deterministic fallback (with and without fallback enabled).
+
 ## Roadmap (not yet implemented)
 
 - Additional detectors (XSS, SSRF, SQLi, path traversal, upload, auth, biz-logic)
-- Wiring a real LLM into the `Reasoner` boundary for prioritization/explanation
 
 The pipeline now runs: **program → authorized discovery → persistent
 attack-surface graph → deterministic planner → authorized tests via the existing

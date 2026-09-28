@@ -29,7 +29,7 @@ CREATE TABLE IF NOT EXISTS planner_runs (
 );
 
 CREATE TABLE IF NOT EXISTS planner_hypotheses (
-    id TEXT PRIMARY KEY,
+    id TEXT NOT NULL,
     run_id TEXT NOT NULL,
     program TEXT NOT NULL,
     plan_key TEXT NOT NULL,
@@ -48,7 +48,8 @@ CREATE TABLE IF NOT EXISTS planner_hypotheses (
     storage_hypothesis_id TEXT,
     finding_id TEXT,
     created_at REAL NOT NULL,
-    updated_at REAL NOT NULL
+    updated_at REAL NOT NULL,
+    PRIMARY KEY (run_id, id)
 );
 
 CREATE INDEX IF NOT EXISTS ix_planner_hyp_run ON planner_hypotheses(run_id);
@@ -107,13 +108,14 @@ class RunStore:
     def save_hypothesis(self, run_id: str, program: str, ph: PlannedHypothesis) -> None:
         now = time.time()
         exists = self._c.execute(
-            "SELECT 1 FROM planner_hypotheses WHERE id=?", (ph.hypothesis_id,)
+            "SELECT 1 FROM planner_hypotheses WHERE run_id=? AND id=?", (run_id, ph.hypothesis_id)
         ).fetchone()
         if exists:
             self._c.execute(
                 "UPDATE planner_hypotheses SET status=?, storage_hypothesis_id=?, finding_id=?,"
-                " updated_at=? WHERE id=?",
-                (ph.status.value, ph.storage_hypothesis_id, ph.finding_id, now, ph.hypothesis_id),
+                " updated_at=? WHERE run_id=? AND id=?",
+                (ph.status.value, ph.storage_hypothesis_id, ph.finding_id, now, run_id,
+                 ph.hypothesis_id),
             )
         else:
             self._c.execute(

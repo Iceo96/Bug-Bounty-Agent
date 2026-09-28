@@ -67,6 +67,7 @@ class DeterministicPlanner(Planner):
                 if key in ctx.known_plan_keys:
                     continue  # already handled in a previous run — reuse, don't regenerate
                 ph = PlannedHypothesis(
+                    hypothesis_id=f"plan_{key}",  # deterministic + stable across runs
                     target=host,
                     endpoint=cand.target_url,
                     method=cand.method,
@@ -112,20 +113,26 @@ class LLMPlanner(Planner):
     """
 
     def __init__(self, reasoner: Reasoner | None = None,
-                 base: Planner | None = None) -> None:
+                 base: Planner | None = None, *, fallback: bool = True) -> None:
         self._reasoner = reasoner
         self._base = base or DeterministicPlanner()
+        self._fallback = fallback
 
     def plan(self, ctx: PlanContext) -> list[PlannedHypothesis]:
         candidates = self._base.plan(ctx)
-        if self._reasoner is None:
+        if self._reasoner is None or not candidates:
             return candidates
 
         by_id = {c.hypothesis_id: c for c in candidates}
         try:
             order = self._reasoner.rank([c.to_public_dict() for c in candidates])
         except Exception as exc:  # noqa: BLE001 — never let the LLM break the run
-            log.warning("planner.reasoner_failed", error=str(exc))
+            if not self._fallback:
+                log.error("planner.reasoner_failed_no_fallback", error=str(exc))
+                raise
+            log.warning("planner.reasoner_fallback", error=str(exc))
+            log.info("planner.final_order", source="deterministic",
+                     order=[c.hypothesis_id for c in candidates])
             return candidates
 
         ranked: list[PlannedHypothesis] = []
@@ -139,4 +146,6 @@ class LLMPlanner(Planner):
         for c in candidates:
             if c.hypothesis_id not in seen:
                 ranked.append(c)
+        log.info("planner.final_order", source="llm",
+                 order=[c.hypothesis_id for c in ranked])
         return ranked

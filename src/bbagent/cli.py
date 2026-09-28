@@ -26,7 +26,8 @@ from pathlib import Path
 from bbagent.config.loader import ProgramConfigError, load_program
 from bbagent.http.client import AuthorizedHTTPClient, RequestBlocked
 from bbagent.logging_config import configure_logging
-from bbagent.planner import PlanRunner, PlannedHypothesis, TestBudget
+from bbagent.llm.reasoner import ReasonerUnavailable, build_reasoner
+from bbagent.planner import LLMPlanner, PlanRunner, PlannedHypothesis, TestBudget
 from bbagent.program.manager import ProgramManager
 from bbagent.recon import AttackSurfaceMapper
 from bbagent.scope.engine import ScopeEngine
@@ -59,6 +60,28 @@ def _print_queue(queue: list[PlannedHypothesis]) -> None:
 
 def _cap_title(vuln_class: str) -> str:
     return {"idor": "Authorization boundary"}.get(vuln_class, vuln_class)
+
+
+def _build_planner(program, use_llm: bool):
+    """Return an LLMPlanner when --llm is requested and usable, else None.
+
+    None means the runner uses its default DeterministicPlanner. If the LLM
+    backend cannot be built, we fall back to deterministic (default) or, when the
+    program disables fallback, abort.
+    """
+    if not use_llm:
+        return None
+    llm_cfg = program.config.llm
+    try:
+        reasoner = build_reasoner(llm_cfg)
+    except ReasonerUnavailable as exc:
+        if llm_cfg.fallback_to_deterministic:
+            print(f"warning: LLM unavailable ({exc}); using deterministic planner", file=sys.stderr)
+            return None
+        print(f"error: LLM unavailable ({exc}) and fallback_to_deterministic is false",
+              file=sys.stderr)
+        raise SystemExit(2)
+    return LLMPlanner(reasoner, fallback=llm_cfg.fallback_to_deterministic)
 
 
 def _program_name(arg: str) -> str:
@@ -163,10 +186,12 @@ def main(argv: list[str] | None = None) -> int:
     p_plan = sub.add_parser("plan", help="Preview the prioritized hypothesis queue (no execution)")
     p_plan.add_argument("config", help="Program config path")
     p_plan.add_argument("--json", action="store_true")
+    p_plan.add_argument("--llm", action="store_true", help="Use the LLM reasoner for prioritization")
 
     p_run = sub.add_parser("run", help="Run the planner: execute authorized tests + verify")
     p_run.add_argument("config", help="Program config path")
     p_run.add_argument("--dry-run", action="store_true", help="Show planned tests; execute nothing")
+    p_run.add_argument("--llm", action="store_true", help="Use the LLM reasoner for prioritization")
     p_run.add_argument("--max-requests", type=int, default=200)
     p_run.add_argument("--max-per-endpoint", type=int, default=2)
     p_run.add_argument("--max-runtime", type=float, default=120.0)
@@ -218,13 +243,16 @@ def main(argv: list[str] | None = None) -> int:
         db = Database(db_path)
         surface = SurfaceStore(db)
         try:
+            use_llm = getattr(args, "llm", False)
+            planner = _build_planner(program, use_llm)
             if args.cmd == "plan":
-                runner = PlanRunner(program, db, surface)
+                runner = PlanRunner(program, db, surface, planner=planner)
                 queue = runner.generate()
                 if args.json:
                     print(json.dumps([h.to_public_dict() for h in queue], indent=2))
                 else:
-                    print(f"# Plan for '{program.name}' — {len(queue)} hypothesis(es)\n")
+                    src = "LLM-prioritized" if planner is not None else "deterministic"
+                    print(f"# Plan for '{program.name}' — {len(queue)} hypothesis(es) [{src}]\n")
                     _print_queue(queue)
                 return 0
 
@@ -233,7 +261,7 @@ def main(argv: list[str] | None = None) -> int:
                                 max_tests_per_endpoint=args.max_per_endpoint,
                                 max_runtime_seconds=args.max_runtime)
             if args.dry_run:
-                runner = PlanRunner(program, db, surface, budget=budget)
+                runner = PlanRunner(program, db, surface, planner=planner, budget=budget)
                 summary = asyncio.run(runner.run(dry_run=True))
                 print(f"# Dry-run plan for '{program.name}' (run {summary.run_id})\n")
                 _print_queue(getattr(runner, "_dry_queue", []))
@@ -243,7 +271,8 @@ def main(argv: list[str] | None = None) -> int:
             async def _do_run() -> int:
                 async with AuthorizedHTTPClient(program.config) as http:
                     evidence = EvidenceStore(db, _evidence_dir())
-                    runner = PlanRunner(program, db, surface, http, evidence, budget=budget)
+                    runner = PlanRunner(program, db, surface, http, evidence,
+                                        planner=planner, budget=budget)
                     summary = await runner.run()
                     print(f"# Run {summary.run_id} for '{program.name}'")
                     print(f"generated={summary.generated} executed={summary.executed} "

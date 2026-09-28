@@ -97,6 +97,24 @@ class TestAccount(BaseModel):
     notes: Optional[str] = None
 
 
+class LLMConfig(BaseModel):
+    """Optional LLM reasoning layer. Prioritization only — never execution.
+
+    Disabled by default. The LLM receives only sanitized, already-scope-checked
+    candidate data and may only reorder/explain; it has no access to HTTP, shell,
+    the filesystem, SQLite, credentials, or the HTTP client.
+    """
+
+    model_config = {"extra": "forbid"}
+
+    enabled: bool = False
+    provider: str = "anthropic"
+    model: str = "claude-sonnet-5-5"
+    max_candidates: int = Field(default=20, ge=1, le=200)
+    timeout_seconds: float = Field(default=30.0, gt=0, le=300)
+    fallback_to_deterministic: bool = True
+
+
 class ScopeConfig(BaseModel):
     """In-scope and excluded assets. Exclusions always win."""
 
@@ -131,6 +149,7 @@ class ProgramConfig(BaseModel):
     )
     rate_limit: RateLimit = Field(default_factory=RateLimit)
     test_accounts: list[TestAccount] = Field(default_factory=list)
+    llm: LLMConfig = Field(default_factory=LLMConfig)
     notes: list[str] = Field(default_factory=list)
 
     @model_validator(mode="after")
