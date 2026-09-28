@@ -54,7 +54,9 @@ def build_lab_program() -> ProgramConfig:
         required_headers={"X-Bug-Bounty": "local-lab"},
         rate_limit=RateLimit(requests_per_second=50, max_concurrent=8),
         test_accounts=[
-            TestAccount(label="user_a", role="user", username="alice", secret_env=ENV_TOKEN_A),
+            # user_a is an admin identity; user_b is a regular user. Roles drive the
+            # function-level (privilege-escalation) capability.
+            TestAccount(label="user_a", role="admin", username="alice", secret_env=ENV_TOKEN_A),
             TestAccount(label="user_b", role="user", username="bob", secret_env=ENV_TOKEN_B),
         ],
         notes=["Local lab — loopback only. Synthetic data."],

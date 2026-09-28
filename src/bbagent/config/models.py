@@ -60,6 +60,7 @@ class RateLimit(BaseModel):
 class TestingRestrictions(BaseModel):
     """Program rules constraining how testing may be performed."""
 
+    __test__ = False  # not a pytest test class
     model_config = {"extra": "forbid"}
 
     allow_active_testing: bool = Field(
@@ -86,6 +87,7 @@ class TestingRestrictions(BaseModel):
 class TestAccount(BaseModel):
     """A test identity provided by the program. Secrets come from env, not YAML."""
 
+    __test__ = False  # not a pytest test class
     model_config = {"extra": "forbid"}
 
     label: str

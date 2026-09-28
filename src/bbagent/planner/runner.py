@@ -16,9 +16,10 @@ from __future__ import annotations
 import time
 from typing import Callable
 
-# Import for its side effect: registers the IDOR/access-control detector+verifier
-# in the verification registry so the engine can find it during execution.
+# Import for their side effect: registers the built-in detectors+verifiers in the
+# verification registry so the engine can find them during execution.
 import bbagent.detectors.idor  # noqa: F401
+import bbagent.detectors.privilege  # noqa: F401
 from bbagent.http.client import AuthorizedHTTPClient
 from bbagent.logging_config import get_logger
 from bbagent.planner.capabilities import CapabilityRegistry, default_capabilities

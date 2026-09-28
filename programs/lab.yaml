@@ -28,7 +28,7 @@ rate_limit:
 
 test_accounts:
   - label: "user_a"
-    role: "user"
+    role: "admin"          # privileged identity for the function-level scenario
     username: "alice"
     secret_env: "BBAGENT_LAB_TOKEN_A"
   - label: "user_b"

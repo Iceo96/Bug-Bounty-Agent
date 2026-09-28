@@ -64,7 +64,10 @@ def _print_queue(queue: list[PlannedHypothesis]) -> None:
 
 
 def _cap_title(vuln_class: str) -> str:
-    return {"idor": "Authorization boundary"}.get(vuln_class, vuln_class)
+    return {
+        "idor": "Authorization boundary",
+        "privilege_escalation": "Privilege escalation (BFLA)",
+    }.get(vuln_class, vuln_class)
 
 
 def _reviewer_name(explicit: str | None) -> str:

@@ -15,12 +15,13 @@ class User:
     user_id: str
     label: str
     token: str  # synthetic, non-secret test token
+    role: str = "user"
 
 
-# Two authorized test identities.
+# Two authorized test identities. user_a is an admin; user_b is a regular user.
 USERS: dict[str, User] = {
-    "user_a": User(user_id="1001", label="user_a", token="tok_test_a_11111111"),
-    "user_b": User(user_id="1002", label="user_b", token="tok_test_b_22222222"),
+    "user_a": User(user_id="1001", label="user_a", token="tok_test_a_11111111", role="admin"),
+    "user_b": User(user_id="1002", label="user_b", token="tok_test_b_22222222", role="user"),
 }
 
 # token -> label, for auth lookups.
@@ -41,5 +42,28 @@ PROFILES: dict[str, dict] = {
 }
 
 
+# Privileged (admin-only) content used by the function-level authorization
+# scenario. Harmless synthetic data.
+ADMIN_REPORT: dict = {
+    "report": {
+        "classification": "restricted",
+        "records": [
+            {"user": "alice", "plan": "gold"},
+            {"user": "bob", "plan": "silver"},
+        ],
+        "total": 2,
+    }
+}
+
+ADMIN_SETTINGS: dict = {
+    "settings": {"classification": "restricted", "feature_flags": {"beta": True}}
+}
+
+
 def label_for_token(token: str) -> str | None:
     return TOKENS.get(token)
+
+
+def role_for_label(label: str | None) -> str | None:
+    user = USERS.get(label or "")
+    return user.role if user else None

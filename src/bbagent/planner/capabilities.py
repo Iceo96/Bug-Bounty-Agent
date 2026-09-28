@@ -138,6 +138,64 @@ class AccessControlCapability(Capability):
         )
 
 
+class PrivilegeEscalationCapability(Capability):
+    """Privilege escalation / broken function-level authorization (read-only, GET)."""
+
+    vuln_class = "privilege_escalation"
+    title = "Privilege escalation (BFLA)"
+    description = (
+        "Detects broken function-level authorization: a non-privileged identity "
+        "reaching a privileged/admin function and receiving restricted content. "
+        "Read-only."
+    )
+    active = False
+
+    def propose(self, view: EndpointView, program: ProgramManager) -> PlanCandidate | None:
+        # Local import avoids a hard module dependency and registers the verifier.
+        from bbagent.detectors.privilege import ADMIN_PATH, resolve_admin_regular
+
+        if not ADMIN_PATH.search(view.endpoint.path):
+            return None
+        admin, regular = resolve_admin_regular(program)
+        if admin is None or regular is None:
+            return None  # need a privileged and a non-privileged identity
+
+        score = 40
+        reasons = ["administrative/privileged endpoint path"]
+        if view.endpoint.auth_requirement == "required":
+            score += 10
+            reasons.append("authentication required")
+        if view.is_api:
+            score += 10
+            reasons.append("API endpoint")
+        if view.distinct_identity_count >= 2:
+            score += 10
+            reasons.append("observed under multiple identity contexts")
+        if view.has_differing_auth:
+            score += 10
+            reasons.append("differing authorization observations across identities")
+        if view.parameters:
+            score += 5
+            reasons.append(f"{len(view.parameters)} parameter(s)")
+
+        return PlanCandidate(
+            vulnerability_class=self.vuln_class,
+            target_url=view.endpoint.url,
+            method="GET",
+            reasoning="; ".join(reasons),
+            score=score,
+            required_auth_context=[admin, regular],
+            required_inputs={"privileged_url": view.endpoint.url,
+                             "privileged_identity": admin, "test_identity": regular},
+            expected_signal=(
+                f"'{regular}' should be denied; must NOT receive the restricted content "
+                f"that '{admin}' sees"
+            ),
+            object_ref_values=[],  # function-level: dedup by endpoint template
+            active=self.active,
+        )
+
+
 class CapabilityRegistry:
     def __init__(self) -> None:
         self._caps: list[Capability] = []
@@ -160,4 +218,5 @@ class CapabilityRegistry:
 def default_capabilities() -> CapabilityRegistry:
     reg = CapabilityRegistry()
     reg.register(AccessControlCapability())
+    reg.register(PrivilegeEscalationCapability())
     return reg

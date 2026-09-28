@@ -43,7 +43,7 @@ http/         AuthorizedHTTPClient (+ token-bucket rate limiter) — only way to
 storage/      SQLite schema, domain models, immutable EvidenceStore
 recon/        Manifest discovery + attack-surface mapper (crawl, JS, extract)
 surface/      Persistent, queryable attack-surface graph (SQLite)
-detectors/    Detector/Verifier interfaces + pluggable registry + real IDOR/BOLA detector
+detectors/    Detector/Verifier interfaces + registry + IDOR/BOLA + privilege-escalation/BFLA
 verification/ VerificationEngine (hypothesis→finding lifecycle) + deduplication
 planner/      Deterministic planner, capability registry, budgets, run history, LLM boundary
 llm/          LLM Reasoner adapter (prioritization only): sanitizer, strict schema, validation
@@ -151,6 +151,18 @@ makes **no external requests**. Data is harmless and synthetic.
   read any note.
 - `GET /api/profile/{id}` — **correctly protected**: only the owner may read it.
 
+Function-level authorization scenario (separate admin manifest at
+`/admin-scope/manifest`, so the object-level scenario above is untouched):
+
+- `GET /api/admin/report` — **vulnerable** (BFLA): performs no role check, so any
+  authenticated user receives the restricted admin report.
+- `GET /api/admin/settings` — **correctly protected**: requires the admin role
+  (non-admins get 403).
+- `GET /api/admin/ping` — **control**: an admin-like path that returns a generic
+  `{"ok":true}` with no privileged data — must NOT be flagged.
+
+Identities: `user_a` is an admin, `user_b` is a regular user (both synthetic).
+
 ### Start / stop the lab (Windows)
 
 ```powershell
@@ -186,6 +198,42 @@ you do **not** need to start the server manually for them.
 This starts the lab in-process, runs discovery → verification → report, and
 writes one Markdown report per verified finding into `.\reports\` (git-ignored).
 It prints the path of each report it writes.
+
+## Detectors (access-control)
+
+Two pluggable, non-destructive access-control detectors are registered in the
+capability registry; both are read-only (GET) and produce a VERIFIED finding
+only from real, reproducible evidence — never from a status code, error message,
+response length, timing, or an LLM guess.
+
+**1. IDOR / BOLA (`idor`)** — object-level authorization. Baseline as the owner,
+then request the *same object* as a second identity; confirmed only when the
+second identity receives the owner's object contents (identical body).
+
+**2. Privilege escalation / BFLA (`privilege_escalation`)** — function-level
+authorization. It fires on admin-like endpoints when the program has an admin and
+a non-admin test identity. Verification is concrete:
+
+1. **Baseline** — the admin identity must receive `200` with identifiable
+   *privileged content* (a value under a sensitive key such as `classification`
+   or `records`). No privileged baseline ⇒ DISPROVEN.
+2. **Access control** — an unauthenticated request must be denied (non-200), or
+   the resource is simply public, not a privilege boundary ⇒ DISPROVEN.
+3. **Escalation** — the non-privileged identity must receive `200` **and** its
+   body must actually disclose the baseline's privileged marker(s). A matching
+   `200` with no privileged data (a generic response) ⇒ DISPROVEN.
+
+All three exchanges (privileged baseline, unauthenticated, non-privileged) are
+captured as immutable evidence. Against the lab: `/api/admin/report` → VERIFIED,
+`/api/admin/settings` → DISPROVEN (403), `/api/admin/ping` → DISPROVEN (no
+privileged content). False positives explicitly rejected: correct 401/403,
+own-resource access, generic 200s, public endpoints, missing/incorrect identities,
+and (via the engine) insufficient evidence, out-of-scope targets, and budget
+exhaustion.
+
+Both detectors run through the **same** planner → verification engine →
+evidence store → review workflow; neither makes raw HTTP requests or bypasses
+scope, rate limits, budgets, or the human-approval gate.
 
 ## Attack-surface mapper
 
@@ -478,6 +526,12 @@ reorder, malformed response, invented candidate, modified endpoint/target/method
 rejection, faithful-echo acceptance, `max_candidates` truncation, secret
 scrubbing + key stripping, prompt-contains-no-secrets, LLM-disabled default, and
 deterministic fallback (with and without fallback enabled).
+
+Plus **privilege-escalation (BFLA)** tests (unit + lab integration): vulnerable
+case VERIFIED, secure case DISPROVEN, generic-200 not flagged, public endpoint
+rejected, missing admin/non-admin identity handled, capability/planner/
+verification/review integration, evidence hashes validated, duplicate/regen
+guard, out-of-scope blocked, budget enforced, and dry-run makes no requests.
 
 Plus **review workflow** tests: verified finding enters the queue, invalid/
 corrupt evidence blocks report generation, missing fields prevent approval, human

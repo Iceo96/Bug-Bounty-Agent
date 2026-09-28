@@ -27,6 +27,28 @@ _JSON = [("Content-Type", "application/json")]
 _NOTE_RE = re.compile(r"^/api/notes/(?P<id>[^/]+)$")
 _PROFILE_RE = re.compile(r"^/api/profile/(?P<id>[^/]+)$")
 
+
+def _admin_manifest() -> dict:
+    """A SEPARATE discovery manifest for the function-level authorization scenario.
+
+    Kept apart from the main manifest so the object-level (IDOR) scenario is
+    unaffected. Lists admin/privileged function endpoints.
+    """
+    return {
+        "application": "bbagent-lab-admin",
+        "endpoints": [
+            {"url": "/api/admin/report", "method": "GET", "object_scoped": False,
+             "example_object_url": "/api/admin/report", "auth_class": "function",
+             "privileged": True},
+            {"url": "/api/admin/settings", "method": "GET", "object_scoped": False,
+             "example_object_url": "/api/admin/settings", "auth_class": "function",
+             "privileged": True},
+            {"url": "/api/admin/ping", "method": "GET", "object_scoped": False,
+             "example_object_url": "/api/admin/ping", "auth_class": "function",
+             "privileged": True},
+        ],
+    }
+
 # A small HTML site + JS bundle so the mapper can exercise real crawling and
 # JavaScript discovery over the loopback socket.
 _SITE_INDEX = """<!doctype html>
@@ -142,6 +164,28 @@ def create_app() -> Callable:
         if path.startswith("/api/"):
             if identity is None:
                 return _resp(start_response, "401 Unauthorized", {"error": "unauthenticated"})
+
+        # --- Admin discovery manifest (separate scenario). -----------------------
+        if path == "/admin-scope/manifest":
+            return _resp(start_response, "200 OK", _admin_manifest())
+
+        # --- Function-level authorization scenario (admin endpoints). ------------
+        # VULNERABLE: /api/admin/report performs NO role check — any authenticated
+        # user receives the restricted admin report (broken function-level authz).
+        if path == "/api/admin/report":
+            return _resp(start_response, "200 OK", data.ADMIN_REPORT)
+
+        # SECURE: /api/admin/settings correctly requires the admin role.
+        if path == "/api/admin/settings":
+            if data.role_for_label(identity) != "admin":
+                return _resp(start_response, "403 Forbidden", {"error": "forbidden"})
+            return _resp(start_response, "200 OK", data.ADMIN_SETTINGS)
+
+        # GENERIC: /api/admin/ping returns a non-privileged 200 to any authenticated
+        # user. It has an admin-like path but exposes NO protected data — a
+        # detector must NOT flag it (a matching 200 is not proof of disclosure).
+        if path == "/api/admin/ping":
+            return _resp(start_response, "200 OK", {"ok": True})
 
         # --- VULNERABLE: notes have no per-object authorization check. -----------
         m = _NOTE_RE.match(path)
