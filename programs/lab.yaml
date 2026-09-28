@@ -1,0 +1,37 @@
+# Program config for the LOCAL vulnerable lab. Loopback only. No secrets here —
+# test-account tokens are resolved from environment variables at runtime.
+name: "Local Vulnerable Lab"
+platform: "local"
+authorized: true
+
+scope:
+  in_scope:
+    - kind: domain
+      value: "127.0.0.1"
+    - kind: domain
+      value: "localhost"
+  excluded: []
+
+restrictions:
+  allow_active_testing: false      # read-only GETs are enough to prove IDOR
+  allowed_methods: ["GET", "HEAD", "OPTIONS"]
+  no_dos: true
+  notes:
+    - "Local lab only. Synthetic data. Never point at an external target."
+
+required_headers:
+  X-Bug-Bounty: "local-lab"
+
+rate_limit:
+  requests_per_second: 50
+  max_concurrent: 8
+
+test_accounts:
+  - label: "user_a"
+    role: "user"
+    username: "alice"
+    secret_env: "BBAGENT_LAB_TOKEN_A"
+  - label: "user_b"
+    role: "user"
+    username: "bob"
+    secret_env: "BBAGENT_LAB_TOKEN_B"

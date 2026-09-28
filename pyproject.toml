@@ -26,6 +26,8 @@ dev = [
 
 [project.scripts]
 bbagent = "bbagent.cli:main"
+bbagent-lab = "bbagent_lab.server:main"
+bbagent-lab-demo = "bbagent_lab.demo:main"
 
 [tool.setuptools.packages.find]
 where = ["src"]

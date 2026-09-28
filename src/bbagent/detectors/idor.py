@@ -11,6 +11,8 @@ returns ``verified=False`` and the engine discards the hypothesis.
 
 from __future__ import annotations
 
+import json
+
 from bbagent.detectors.base import (
     Detector,
     DetectionContext,
@@ -19,6 +21,7 @@ from bbagent.detectors.base import (
     Verifier,
     registry,
 )
+from bbagent.program.manager import ProgramManager
 from bbagent.storage.models import Hypothesis
 from bbagent.verification.dedup import compute_dedup_key
 
@@ -59,62 +62,118 @@ class IDORDetector(Detector):
         return hyps
 
 
+def _identity_headers(program: ProgramManager, label: str) -> dict[str, str]:
+    """Build auth headers for a test identity.
+
+    Prefer a real bearer token resolved from the account's ``secret_env``; if no
+    secret is configured, fall back to an ``X-Test-Identity`` marker header (used
+    by lightweight mock targets in unit tests).
+    """
+    token = program.resolve_account_secret(label)
+    if token:
+        return {"Authorization": f"Bearer {token}"}
+    return {"X-Test-Identity": label}
+
+
+def _resolve_identities(program: ProgramManager) -> tuple[str, str]:
+    """Return (owner_label, other_label). Owner is the first configured account.
+
+    Falls back to synthetic ``user_a``/``user_b`` when the program declares fewer
+    than two test accounts, so the detector works against simple mock targets.
+    """
+    accounts = program.config.test_accounts
+    if len(accounts) >= 2:
+        return accounts[0].label, accounts[1].label
+    return "user_a", "user_b"
+
+
+def _same_object(body_a: str, body_b: str) -> bool:
+    """True if two response bodies represent the same object contents.
+
+    Compares parsed JSON when possible (order-insensitive), else exact bytes.
+    Empty bodies never count as a match — a match must be positive evidence.
+    """
+    if not body_a.strip() or not body_b.strip():
+        return False
+    try:
+        return json.loads(body_a) == json.loads(body_b)
+    except json.JSONDecodeError:
+        return body_a == body_b
+
+
 @registry.register_verifier
 class IDORVerifier(Verifier):
+    """Confirm IDOR/BOLA by comparing two identities' access to the SAME object.
+
+    Method:
+      1. Identify the object reference (``hypothesis.target_url``, owned by A).
+      2. Establish a baseline: fetch the object as the legitimate owner (A).
+      3. Fetch the same object as a second authorized identity (B).
+      4. Compare. Unauthorized access is proven only when B receives the *same
+         object contents* as A — a matching status code alone is NOT sufficient.
+
+    A finding is produced only when that comparison holds; otherwise the result
+    is ``verified=False`` and the engine discards the hypothesis. Both exchanges
+    are always returned so the engine can persist immutable evidence; if either
+    request cannot be made, verification fails (no fabricated evidence).
+    """
+
     vuln_type = "idor"
 
     async def verify(self, ctx: VerificationContext) -> VerificationResult:
-        """Confirm IDOR by comparing two identities' access to the same object.
-
-        Expects the hypothesis ``target_url`` to be the object owned by identity
-        A. We fetch it as A (owner) and as B (other user). If B receives the
-        same object contents, object-level authorization is broken.
-
-        Identities are conveyed via headers here for the example; a real verifier
-        would use authenticated sessions from the program's test accounts.
-        """
         url = ctx.hypothesis.target_url
+        owner_label, other_label = _resolve_identities(ctx.program)
 
-        owner = await ctx.http.get(url, headers={"X-Test-Identity": "user_a"})
-        other = await ctx.http.get(url, headers={"X-Test-Identity": "user_b"})
+        # (2) Baseline as the legitimate owner (identity A, object A).
+        owner = await ctx.http.get(url, headers=_identity_headers(ctx.program, owner_label))
+        # (3) Same object as the second authorized identity (identity B).
+        other = await ctx.http.get(url, headers=_identity_headers(ctx.program, other_label))
 
-        broken = (
-            owner.status_code == 200
-            and other.status_code == 200
-            and owner.response_body == other.response_body
-            and owner.response_body.strip() != ""
-        )
+        # The owner must actually see a real object, or there is no baseline to
+        # compare against and we cannot claim anything.
+        if owner.status_code != 200 or not owner.response_body.strip():
+            return VerificationResult(
+                verified=False,
+                reason=f"no owner baseline (owner status={owner.status_code})",
+                exchanges=[owner, other],
+            )
+
+        # (4) Evidence of unauthorized access: B receives A's object contents.
+        same = _same_object(owner.response_body, other.response_body)
+        broken = other.status_code == 200 and same
 
         if not broken:
             return VerificationResult(
                 verified=False,
                 reason=(
-                    f"no cross-user access: owner={owner.status_code}, "
-                    f"other={other.status_code}, bodies_match="
-                    f"{owner.response_body == other.response_body}"
+                    f"authorization holds: owner={owner.status_code}, "
+                    f"other={other.status_code}, same_object={same}"
                 ),
                 exchanges=[owner, other],
             )
 
         return VerificationResult(
             verified=True,
-            reason="second identity read the first identity's object",
+            reason="second identity read the first identity's object contents",
             exchanges=[owner, other],
             expected_behavior=(
-                "user_b should receive 403/404 when requesting user_a's object."
+                f"'{other_label}' should receive 403/404 when requesting "
+                f"'{owner_label}'s object at {url}."
             ),
             actual_behavior=(
-                "user_b received HTTP 200 with user_a's object contents."
+                f"'{other_label}' received HTTP {other.status_code} returning the "
+                f"identical object contents that '{owner_label}' sees."
             ),
             impact=(
-                "Broken object-level authorization allows any authenticated user "
-                "to read other users' objects (IDOR/BOLA)."
+                "Broken object-level authorization (IDOR/BOLA): any authenticated "
+                "user can read other users' objects by changing the object id."
             ),
-            test_identity="user_b (non-owner)",
+            test_identity=f"{other_label} (non-owner)",
             reproduction=(
-                f"1. Authenticate as user_b.\n"
-                f"2. GET {url} (an object owned by user_a).\n"
-                f"3. Observe HTTP 200 returning user_a's data."
+                f"1. Authenticate as '{owner_label}' and GET {url} — note the object.\n"
+                f"2. Authenticate as '{other_label}' (who does not own it).\n"
+                f"3. GET {url} again as '{other_label}'.\n"
+                f"4. Observe HTTP {other.status_code} returning '{owner_label}'s object."
             ),
             dedup_key=compute_dedup_key("idor", url, "GET"),
         )

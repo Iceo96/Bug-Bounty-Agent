@@ -41,11 +41,20 @@ program/      ProgramManager — authoritative accessor for scope, headers, acco
 scope/        ScopeEngine — the fail-closed gate every request passes
 http/         AuthorizedHTTPClient (+ token-bucket rate limiter) — only way to send
 storage/      SQLite schema, domain models, immutable EvidenceStore
-detectors/    Detector/Verifier interfaces + pluggable registry (+ example: idor)
+recon/        Manifest-based endpoint discovery (scope-bounded)
+detectors/    Detector/Verifier interfaces + pluggable registry + real IDOR/BOLA detector
 verification/ VerificationEngine (hypothesis→finding lifecycle) + deduplication
 review.py     Human approval state machine
 report.py     Markdown report generation from verified data + evidence
 cli.py        Conservative CLI (validate config, scope-check a URL)
+
+bbagent_lab/  Local deliberately-vulnerable app + agent glue (loopback only)
+  app.py        Vulnerable WSGI app: /api/notes/{id} (IDOR) + /api/profile/{id} (protected)
+  data.py       Deterministic synthetic accounts/objects (non-secret test tokens)
+  server.py     Loopback-only WSGI server + BackgroundLab for tests
+  agent_config.py  Builds the loopback-scoped ProgramConfig for the lab
+  pipeline.py   Wires recon → detect → verify → evidence → findings
+  demo.py       Runs the full pipeline and writes example reports
 ```
 
 ### Key design decisions
@@ -103,45 +112,92 @@ behavior, impact, and evidence blocks (each integrity-verified before inclusion)
 **No severity** is emitted unless the caller supplies one from a program-specific
 methodology.
 
-## Getting started
+## Getting started (Windows / PowerShell)
 
-```bash
+Exact commands, run from the project root (`C:\...\Bug-Bounty-Agent`):
+
+```powershell
+# 1) Create the environment
 python -m venv .venv
-# Windows:  .venv\Scripts\activate     |  macOS/Linux: source .venv/bin/activate
-pip install -e ".[dev]"
-cp .env.example .env        # fill in secrets; .env is git-ignored
+
+# 2) Install dependencies (editable, with dev/test extras)
+.venv\Scripts\python.exe -m pip install --upgrade pip
+.venv\Scripts\python.exe -m pip install -e ".[dev]"
+
+# 3) (optional) create your local .env — it is git-ignored; never commit secrets
+Copy-Item .env.example .env
 
 # Validate a program and check scope:
-python -m bbagent.cli validate programs/example.yaml
-python -m bbagent.cli scope programs/example.yaml http://localhost/x
-
-# Run the tests:
-pytest -q
+.venv\Scripts\python.exe -m bbagent.cli validate programs\lab.yaml
+.venv\Scripts\python.exe -m bbagent.cli scope programs\lab.yaml http://127.0.0.1/api/notes/note-a1
 ```
 
-The shipped `programs/example.yaml` points **only at local hosts** and is safe to
-experiment with. Do not point a config at a target you are not authorized to test.
+> macOS/Linux: use `source .venv/bin/activate` then `pip install -e ".[dev]"`.
+
+## The local vulnerable lab
+
+A completely local, deliberately-vulnerable app that exercises the agent from
+discovery through verified finding and report. It **binds only to 127.0.0.1** and
+makes **no external requests**. Data is harmless and synthetic.
+
+- `GET /api/notes/{id}` — **vulnerable** (IDOR/BOLA): any authenticated user can
+  read any note.
+- `GET /api/profile/{id}` — **correctly protected**: only the owner may read it.
+
+### Start / stop the lab (Windows)
+
+```powershell
+# Start (foreground; press Ctrl+C to stop):
+.venv\Scripts\python.exe -m bbagent_lab.server --port 8000
+#   or: powershell -ExecutionPolicy Bypass -File scripts\start-lab.ps1 -Port 8000
+
+# Stop a lab you started in another window/background:
+powershell -ExecutionPolicy Bypass -File scripts\stop-lab.ps1 -Port 8000
+```
+
+Once running, the discovery manifest is at `http://127.0.0.1:8000/`.
+
+### Run the integration tests
+
+```powershell
+# Just the lab integration suite:
+.venv\Scripts\python.exe -m pytest tests\test_integration_lab.py -q
+
+# The complete suite:
+.venv\Scripts\python.exe -m pytest -q
+```
+
+The integration tests start the lab in-process on an ephemeral loopback port, so
+you do **not** need to start the server manually for them.
+
+### Generate the example report
+
+```powershell
+.venv\Scripts\python.exe -m bbagent_lab.demo
+```
+
+This starts the lab in-process, runs discovery → verification → report, and
+writes one Markdown report per verified finding into `.\reports\` (git-ignored).
+It prints the path of each report it writes.
 
 ## Testing
 
-`pytest` covers: scope validation and exclusions, required-header injection,
-method/path restrictions, rate limiting, the authorization gate on config load,
-evidence capture/immutability/tamper-detection, hypothesis→finding verification,
-the no-evidence-no-finding rule, deduplication, and the human-approval state
-machine. All exchanges in tests use an injected `httpx.MockTransport` — the suite
-makes **no real network calls**.
+`pytest` covers, in unit tests (mocked transport, no sockets):
+scope validation and exclusions, required-header injection, method/path
+restrictions, rate limiting, the authorization gate on config load, evidence
+capture/immutability/tamper-detection, hypothesis→finding verification, the
+no-evidence-no-finding rule, deduplication, and the human-approval state machine.
+
+And in **integration tests** against the real lab over a localhost socket:
+the vulnerable endpoint is detected, the protected endpoint is not, evidence is
+captured and its hashes stay valid, a finding cannot exist without evidence,
+scope rules still apply (non-loopback denied), and every touched/recorded target
+is loopback (no external requests).
 
 ## Roadmap (not yet implemented)
 
-- Recon engine (asset/HTTP/endpoint/JS/API/param discovery, tech fingerprinting)
+- Broader recon (asset/HTTP/JS/API/param discovery, tech fingerprinting) beyond
+  the current manifest-based endpoint discovery
 - Attack-surface mapper persistence beyond the core tables
 - Additional detectors (XSS, SSRF, SQLi, path traversal, upload, auth, biz-logic)
 - The controlled-tool LLM brain
-- A local deliberately-vulnerable test lab for end-to-end exercises
-
-## Local test lab (planned)
-
-Before any real engagement, stand up a local vulnerable app (e.g. a small Flask
-app with intentional IDOR/XSS) and point `programs/example.yaml` at `localhost`.
-This lets the full pipeline — recon → hypothesis → verification → evidence →
-report — run without touching any external target.

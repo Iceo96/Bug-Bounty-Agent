@@ -21,6 +21,7 @@ env/
 data/
 evidence/
 runs/
+reports/
 
 # Tooling
 .pytest_cache/
