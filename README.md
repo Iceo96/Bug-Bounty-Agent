@@ -43,7 +43,7 @@ http/         AuthorizedHTTPClient (+ token-bucket rate limiter) — only way to
 storage/      SQLite schema, domain models, immutable EvidenceStore
 recon/        Manifest discovery + attack-surface mapper (crawl, JS, extract)
 surface/      Persistent, queryable attack-surface graph (SQLite)
-detectors/    Detector/Verifier interfaces + registry + IDOR/BOLA + privilege-escalation/BFLA
+detectors/    Detector/Verifier interfaces + registry + IDOR/BOLA + BFLA + reflected-XSS
 verification/ VerificationEngine (hypothesis→finding lifecycle) + deduplication
 planner/      Deterministic planner, capability registry, budgets, run history, LLM boundary
 llm/          LLM Reasoner adapter (prioritization only): sanitizer, strict schema, validation
@@ -163,6 +163,17 @@ Function-level authorization scenario (separate admin manifest at
 
 Identities: `user_a` is an admin, `user_b` is a regular user (both synthetic).
 
+Reflected-XSS scenario (separate manifest at `/xss-scope/manifest`):
+
+- `GET /search?q=` — **vulnerable**: reflects `q` into HTML text context without
+  encoding.
+- `GET /search-safe?q=` — **secure**: reflects `q` but HTML-encodes it (inert).
+- `GET /echo?q=` — **control**: reflects `q` verbatim in a `text/plain` response —
+  the string appears but cannot execute, so it must NOT be flagged.
+
+All payloads are harmless, deterministic, loopback-only (no scripts, no callbacks,
+no cookies/credentials).
+
 ### Start / stop the lab (Windows)
 
 ```powershell
@@ -231,8 +242,28 @@ own-resource access, generic 200s, public endpoints, missing/incorrect identitie
 and (via the engine) insufficient evidence, out-of-scope targets, and budget
 exhaustion.
 
-Both detectors run through the **same** planner → verification engine →
-evidence store → review workflow; neither makes raw HTTP requests or bypasses
+**3. Reflected XSS (`reflected_xss`)** — proposed only when an endpoint has a
+user-controlled query parameter. The verifier injects a **unique, harmless marker
+payload** (a custom element + attribute — no JavaScript, handlers, or callbacks)
+through the AuthorizedHTTPClient and analyzes the response with `html.parser`:
+
+- **Reflection baseline** — a benign value must first be reflected, or the
+  parameter is not a sink ⇒ DISPROVEN.
+- **Context analysis** — VERIFIED only when the marker becomes **live markup** (a
+  new element or an injected attribute materializes in the parsed HTML). This is
+  the deterministic, browser-free proof that input crossed from data into HTML
+  structure (HTML-text and attribute-breakout contexts).
+- Encoded reflection (`&lt;…&gt;`), plain-text / non-HTML responses, generic
+  responses, and non-reflected input are all DISPROVEN. Reflection that lands
+  only inside a `<script>` block is **INCONCLUSIVE** (not VERIFIED).
+
+**Limitation (by design):** there is no browser/JS engine, so the detector proves
+*reflected executable HTML context* (markup creation) — it does **not** claim
+JavaScript execution. Script-context-only reflection is reported inconclusive
+rather than verified, and would require an actual browser engine to confirm.
+
+All three detectors run through the **same** planner → verification engine →
+evidence store → review workflow; none makes raw HTTP requests or bypasses
 scope, rate limits, budgets, or the human-approval gate.
 
 ## Attack-surface mapper
@@ -532,6 +563,13 @@ case VERIFIED, secure case DISPROVEN, generic-200 not flagged, public endpoint
 rejected, missing admin/non-admin identity handled, capability/planner/
 verification/review integration, evidence hashes validated, duplicate/regen
 guard, out-of-scope blocked, budget enforced, and dry-run makes no requests.
+
+Plus **reflected-XSS** tests (unit + lab integration): vulnerable reflection
+VERIFIED, HTML-encoded reflection DISPROVEN, plain-text/non-HTML DISPROVEN,
+generic 200 DISPROVEN, payload-not-reflected DISPROVEN, attribute-breakout
+VERIFIED, script-context inconclusive (not VERIFIED), malformed hypothesis (no
+param), out-of-scope blocked, dry-run makes no requests, budget enforced,
+evidence hashes validated, and review-workflow integration.
 
 Plus **review workflow** tests: verified finding enters the queue, invalid/
 corrupt evidence blocks report generation, missing fields prevent approval, human

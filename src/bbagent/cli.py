@@ -67,6 +67,7 @@ def _cap_title(vuln_class: str) -> str:
     return {
         "idor": "Authorization boundary",
         "privilege_escalation": "Privilege escalation (BFLA)",
+        "reflected_xss": "Reflected XSS",
     }.get(vuln_class, vuln_class)
 
 

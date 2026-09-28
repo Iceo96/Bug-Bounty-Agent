@@ -16,9 +16,11 @@ Pure stdlib (wsgiref-compatible). No external calls, ever.
 
 from __future__ import annotations
 
+import html
 import json
 import re
 from typing import Callable, Iterable
+from urllib.parse import parse_qs
 
 from bbagent_lab import data
 
@@ -26,6 +28,25 @@ _JSON = [("Content-Type", "application/json")]
 
 _NOTE_RE = re.compile(r"^/api/notes/(?P<id>[^/]+)$")
 _PROFILE_RE = re.compile(r"^/api/profile/(?P<id>[^/]+)$")
+
+
+def _xss_manifest() -> dict:
+    """Separate manifest for the reflected-XSS scenario (keeps others untouched)."""
+    return {
+        "application": "bbagent-lab-xss",
+        "endpoints": [
+            {"url": "/search", "method": "GET", "object_scoped": False,
+             "example_object_url": "/search?q=probe", "input_param": "q"},
+            {"url": "/search-safe", "method": "GET", "object_scoped": False,
+             "example_object_url": "/search-safe?q=probe", "input_param": "q"},
+            {"url": "/echo", "method": "GET", "object_scoped": False,
+             "example_object_url": "/echo?q=probe", "input_param": "q"},
+        ],
+    }
+
+
+def _query_param(environ, name: str) -> str:
+    return parse_qs(environ.get("QUERY_STRING", "")).get(name, [""])[0]
 
 
 def _admin_manifest() -> dict:
@@ -168,6 +189,32 @@ def create_app() -> Callable:
         # --- Admin discovery manifest (separate scenario). -----------------------
         if path == "/admin-scope/manifest":
             return _resp(start_response, "200 OK", _admin_manifest())
+
+        # --- Reflected-XSS scenario (separate manifest + endpoints). -------------
+        if path == "/xss-scope/manifest":
+            return _resp(start_response, "200 OK", _xss_manifest())
+
+        # VULNERABLE: reflects `q` into HTML text context WITHOUT encoding.
+        if path == "/search":
+            q = _query_param(environ, "q")
+            page = f"<!doctype html><html><head><title>Search</title></head>" \
+                   f"<body><h1>Search</h1><p>Results for: {q}</p></body></html>"
+            return _html(start_response, "200 OK", page)
+
+        # SECURE: reflects `q` but correctly HTML-encodes it (inert text).
+        if path == "/search-safe":
+            q = html.escape(_query_param(environ, "q"))
+            page = f"<!doctype html><html><head><title>Search</title></head>" \
+                   f"<body><h1>Search</h1><p>Results for: {q}</p></body></html>"
+            return _html(start_response, "200 OK", page)
+
+        # CONTROL: reflects `q` verbatim but in a NON-HTML (text/plain) context —
+        # the string appears but cannot execute; must NOT be flagged.
+        if path == "/echo":
+            body = f"echo: {_query_param(environ, 'q')}".encode("utf-8")
+            start_response("200 OK", [("Content-Type", "text/plain; charset=utf-8"),
+                                      ("Content-Length", str(len(body)))])
+            return [body]
 
         # --- Function-level authorization scenario (admin endpoints). ------------
         # VULNERABLE: /api/admin/report performs NO role check — any authenticated

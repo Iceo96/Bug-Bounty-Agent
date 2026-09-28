@@ -196,6 +196,57 @@ class PrivilegeEscalationCapability(Capability):
         )
 
 
+class ReflectedXSSCapability(Capability):
+    """Reflected XSS: proposes a test only when an endpoint has an input parameter."""
+
+    vuln_class = "reflected_xss"
+    title = "Reflected XSS"
+    description = (
+        "Detects reflected XSS by injecting a harmless marker payload into a "
+        "user-controlled parameter and confirming, via deterministic HTML parsing, "
+        "that it reflects as live markup (not encoded text). No browser execution."
+    )
+    active = False  # GET probe, non-destructive
+
+    def propose(self, view: EndpointView, program: ProgramManager) -> PlanCandidate | None:
+        from urllib.parse import urlsplit, urlunsplit
+
+        query_params = [p.name for p in view.parameters if p.location == "query"]
+        query_params = query_params or list(view.endpoint.query_params)
+        if not query_params:
+            return None  # no plausible user-controlled input
+        param = sorted(query_params)[0]
+
+        p = urlsplit(view.endpoint.url)
+        base = urlunsplit((p.scheme, p.netloc, p.path, "", ""))
+        target_url = f"{base}?{param}="
+
+        score = 40
+        reasons = [f"user-controlled parameter '{param}'"]
+        if len(query_params) > 1:
+            score += 10
+            reasons.append(f"{len(query_params)} parameters")
+        if view.endpoint.method.upper() == "GET":
+            score += 10
+            reasons.append("GET endpoint")
+        if view.is_api:
+            score += 5
+            reasons.append("API endpoint")
+
+        return PlanCandidate(
+            vulnerability_class=self.vuln_class,
+            target_url=target_url,
+            method="GET",
+            reasoning="; ".join(reasons),
+            score=score,
+            required_auth_context=[],  # reflected XSS needs no identity
+            required_inputs={"param": param, "url": base},
+            expected_signal="payload reflected as inert encoded text, not as live HTML markup",
+            object_ref_values=[param],  # dedup per (endpoint, param)
+            active=self.active,
+        )
+
+
 class CapabilityRegistry:
     def __init__(self) -> None:
         self._caps: list[Capability] = []
@@ -219,4 +270,5 @@ def default_capabilities() -> CapabilityRegistry:
     reg = CapabilityRegistry()
     reg.register(AccessControlCapability())
     reg.register(PrivilegeEscalationCapability())
+    reg.register(ReflectedXSSCapability())
     return reg
