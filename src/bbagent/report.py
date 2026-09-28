@@ -39,6 +39,15 @@ def generate_report(
     lines: list[str] = []
     lines.append(f"# {finding.title}")
     lines.append("")
+
+    # Deterministic completeness check: mark incomplete rather than guessing.
+    from bbagent.validation import report_quality
+
+    quality = report_quality(finding, db, evidence)
+    if not quality.complete:
+        lines.append(f"> ⚠️ **INCOMPLETE REPORT** — missing/failed: {', '.join(quality.issues)}.")
+        lines.append("> This report is not ready for submission. No information has been invented.")
+        lines.append("")
     lines.append(f"- **Program:** {finding.program}")
     lines.append(f"- **Status:** {finding.status.value}")
     lines.append(f"- **Vulnerability type:** {finding.vuln_type}")

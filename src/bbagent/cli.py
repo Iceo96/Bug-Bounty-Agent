@@ -30,10 +30,15 @@ from bbagent.llm.reasoner import ReasonerUnavailable, build_reasoner
 from bbagent.planner import LLMPlanner, PlanRunner, PlannedHypothesis, TestBudget
 from bbagent.program.manager import ProgramManager
 from bbagent.recon import AttackSurfaceMapper
+from bbagent.report import generate_report
+from bbagent.review import ApprovalError
+from bbagent.reviewstore import ReviewError, ReviewStore
 from bbagent.scope.engine import ScopeEngine
 from bbagent.storage.db import Database
 from bbagent.storage.evidence import EvidenceStore
+from bbagent.storage.models import FindingStatus
 from bbagent.surface.store import SurfaceStore
+from bbagent.validation import validate_evidence
 
 
 def _default_db() -> str:
@@ -60,6 +65,87 @@ def _print_queue(queue: list[PlannedHypothesis]) -> None:
 
 def _cap_title(vuln_class: str) -> str:
     return {"idor": "Authorization boundary"}.get(vuln_class, vuln_class)
+
+
+def _reviewer_name(explicit: str | None) -> str:
+    name = explicit or os.getenv("USERNAME") or os.getenv("USER") or "operator"
+    if name == "agent":
+        name = "operator"  # the agent may never act as an approver
+    return name
+
+
+def _handle_review(args, db: Database, evidence: EvidenceStore, rs: ReviewStore) -> int:
+    if args.cmd == "findings":
+        program = args.program
+        findings = db.list_findings(program)
+        if args.status:
+            findings = [f for f in findings if f.status.value == args.status]
+        if not findings:
+            print("(no findings)")
+            return 0
+        for f in findings:
+            print(f"{f.id}  [{f.status.value}]  {f.vuln_type}  {f.http_method} {f.endpoint}")
+        return 0
+
+    fid = args.finding_id
+
+    if args.cmd == "review":
+        finding = db.get_finding(fid)
+        if finding is None:
+            print(f"error: no such finding: {fid}", file=sys.stderr)
+            return 1
+        try:
+            item = rs.get(fid)
+        except ReviewError:
+            item = rs.submit_for_review(fid)  # validates evidence, generates report
+        print(f"# Review: {fid}  [{item.status}]")
+        print(f"quality_complete={item.quality_complete}")
+        if item.duplicates:
+            print(f"possible duplicates: {', '.join(item.duplicates)}")
+        else:
+            print("possible duplicates: none")
+        print("\n----- report -----\n")
+        print(item.current_report)
+        return 0
+
+    if args.cmd == "report":
+        try:
+            item = rs.get(fid)
+            print(item.generated_report if args.generated else item.current_report)
+            return 0
+        except ReviewError:
+            finding = db.get_finding(fid)
+            if finding is None:
+                print(f"error: no such finding: {fid}", file=sys.stderr)
+                return 1
+            ev = validate_evidence(finding, db, evidence)
+            if not ev.ok:
+                print(f"error: evidence invalid: {'; '.join(ev.errors)}", file=sys.stderr)
+                return 1
+            print(generate_report(finding, db, evidence))
+            return 0
+
+    if args.cmd == "reject":
+        item = rs.reject(fid, reviewer=_reviewer_name(args.reviewer), note=args.note)
+        print(f"{fid} -> {item.status}")
+        return 0
+
+    if args.cmd == "approve":
+        reviewer = _reviewer_name(args.reviewer)
+        if not args.yes:
+            try:
+                answer = input(f"Type the finding id '{fid}' to APPROVE FOR SUBMISSION: ")
+            except EOFError:
+                answer = ""
+            if answer.strip() != fid:
+                print("approval aborted (confirmation did not match)")
+                return 1
+        item = rs.approve(fid, reviewer=reviewer)
+        print(f"{fid} -> {item.status}  (reviewer: {reviewer})")
+        print("NOTE: the agent does not submit. Submit the report manually to the platform.")
+        return 0
+
+    return 0
 
 
 def _build_planner(program, use_llm: bool):
@@ -196,6 +282,27 @@ def main(argv: list[str] | None = None) -> int:
     p_run.add_argument("--max-per-endpoint", type=int, default=2)
     p_run.add_argument("--max-runtime", type=float, default=120.0)
 
+    p_findings = sub.add_parser("findings", help="List findings and their review status")
+    p_findings.add_argument("--program", default=None)
+    p_findings.add_argument("--status", default=None)
+
+    p_review = sub.add_parser("review", help="Enqueue (if needed) and show a finding for review")
+    p_review.add_argument("finding_id")
+
+    p_report = sub.add_parser("report", help="Print the Markdown report for a finding")
+    p_report.add_argument("finding_id")
+    p_report.add_argument("--generated", action="store_true", help="Show the immutable generated report")
+
+    p_approve = sub.add_parser("approve", help="Approve a finding FOR SUBMISSION (human only)")
+    p_approve.add_argument("finding_id")
+    p_approve.add_argument("--reviewer", default=None)
+    p_approve.add_argument("--yes", action="store_true", help="Skip the interactive confirmation")
+
+    p_reject = sub.add_parser("reject", help="Reject a finding")
+    p_reject.add_argument("finding_id")
+    p_reject.add_argument("--reviewer", default=None)
+    p_reject.add_argument("--note", default="")
+
     args = parser.parse_args(argv)
     db_path = args.db or _default_db()
 
@@ -281,6 +388,22 @@ def main(argv: list[str] | None = None) -> int:
                     print(f"findings_created={summary.findings_created} stop={summary.stop_reason}")
                     return 0
             return asyncio.run(_do_run())
+        finally:
+            db.close()
+
+    # Review / reporting commands.
+    if args.cmd in ("findings", "review", "report", "approve", "reject"):
+        if not Path(db_path).exists():
+            print(f"error: no database at {db_path}", file=sys.stderr)
+            return 2
+        db = Database(db_path)
+        evidence = EvidenceStore(db, _evidence_dir())
+        rs = ReviewStore(db, evidence)
+        try:
+            return _handle_review(args, db, evidence, rs)
+        except (ReviewError, ApprovalError) as exc:
+            print(f"error: {exc}", file=sys.stderr)
+            return 1
         finally:
             db.close()
 

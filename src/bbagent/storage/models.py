@@ -30,6 +30,7 @@ class FindingStatus(str, Enum):
     # A finding only exists after verification succeeded.
     VERIFIED = "verified"
     READY_FOR_REVIEW = "ready_for_review"
+    CHANGES_REQUESTED = "changes_requested"
     APPROVED_FOR_SUBMISSION = "approved_for_submission"
     REJECTED = "rejected"
 

@@ -5,6 +5,7 @@ Only a human moves a finding forward through review. Submission itself is
 deliberately out of scope for this tool.
 
     VERIFIED -> READY_FOR_REVIEW -> APPROVED_FOR_SUBMISSION
+                              |-> CHANGES_REQUESTED -> READY_FOR_REVIEW
                               \-> REJECTED
 """
 
@@ -22,6 +23,11 @@ _TRANSITIONS: dict[FindingStatus, set[FindingStatus]] = {
     FindingStatus.VERIFIED: {FindingStatus.READY_FOR_REVIEW},
     FindingStatus.READY_FOR_REVIEW: {
         FindingStatus.APPROVED_FOR_SUBMISSION,
+        FindingStatus.CHANGES_REQUESTED,
+        FindingStatus.REJECTED,
+    },
+    FindingStatus.CHANGES_REQUESTED: {
+        FindingStatus.READY_FOR_REVIEW,
         FindingStatus.REJECTED,
     },
     FindingStatus.APPROVED_FOR_SUBMISSION: set(),

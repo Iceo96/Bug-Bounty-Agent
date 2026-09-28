@@ -47,6 +47,10 @@ detectors/    Detector/Verifier interfaces + pluggable registry + real IDOR/BOLA
 verification/ VerificationEngine (hypothesis→finding lifecycle) + deduplication
 planner/      Deterministic planner, capability registry, budgets, run history, LLM boundary
 llm/          LLM Reasoner adapter (prioritization only): sanitizer, strict schema, validation
+validation.py Evidence validation + deterministic report-quality checks
+reviewstore.py Persistent human-review queue (immutable + edited reports, duplicates)
+review.py     Approval state machine (human-only approval)
+report.py     Markdown report generation (marks incomplete rather than guessing)
 review.py     Human approval state machine
 report.py     Markdown report generation from verified data + evidence
 cli.py        Conservative CLI (validate config, scope-check a URL)
@@ -372,6 +376,77 @@ fallback is disabled). Logs show the candidate count, that the LLM was requested
 whether its response was validated or rejected, whether fallback was used, and
 the final execution order — never any secret.
 
+## Human review & reporting
+
+Verified findings do not go anywhere automatically. They pass through a
+persistent review queue and require a **human** to approve them; the agent/LLM
+can never approve, and **nothing is ever auto-submitted**.
+
+Statuses: `VERIFIED → READY_FOR_REVIEW → APPROVED_FOR_SUBMISSION`, with
+`CHANGES_REQUESTED` and `REJECTED` as branches. Only a human actor may reach
+`APPROVED_FOR_SUBMISSION`.
+
+Before a finding enters the queue:
+
+- **Evidence is validated** — every referenced blob is re-hashed (SHA-256),
+  required request/response exchanges must exist, and the request URLs must match
+  the finding's endpoint/asset. Missing or corrupt evidence blocks report
+  generation entirely.
+- **Quality is checked** deterministically — target, endpoint, vuln class,
+  reproduction steps, evidence, valid hashes, expected/actual behavior, and no
+  placeholder text. If anything is missing the report is marked **INCOMPLETE**
+  (never guessed) and approval is refused.
+- **Duplicates are surfaced** — existing findings sharing the dedup key or the
+  same vuln-class + endpoint template are shown to the reviewer, never silently
+  discarded.
+
+The generated report is stored **immutably**; operator edits are stored
+separately with timestamps and the reviewer's action.
+
+### Review CLI
+
+```powershell
+# List findings and their review status:
+.venv\Scripts\python.exe -m bbagent.cli --db data\lab.db findings
+
+# Enqueue (validate + generate report + surface duplicates) and inspect:
+.venv\Scripts\python.exe -m bbagent.cli --db data\lab.db review <finding-id>
+
+# Print the report (current, or --generated for the immutable original):
+.venv\Scripts\python.exe -m bbagent.cli --db data\lab.db report <finding-id>
+
+# Approve FOR SUBMISSION — requires typing the finding id to confirm (human only):
+.venv\Scripts\python.exe -m bbagent.cli --db data\lab.db approve <finding-id> --reviewer you
+
+# Reject:
+.venv\Scripts\python.exe -m bbagent.cli --db data\lab.db reject <finding-id> --reviewer you --note "duplicate"
+```
+
+`approve` reaches `APPROVED_FOR_SUBMISSION` and then **stops** — it prints a
+reminder that you submit the report to the bug bounty platform manually.
+Automatic submission is intentionally not implemented.
+
+## End-to-end lifecycle
+
+```
+program config
+  → authorized discovery (recon / attack-surface mapper)
+  → attack-surface graph (assets, endpoints, params, object-refs, auth-contexts)
+  → planner: generate → prioritize (deterministic, optional LLM) → dedup
+  → execute authorized test via existing verifier (scope + rate + budget enforced)
+  → verification: real request/response evidence, hashed & stored immutably
+  → verified finding  (a hypothesis is never a finding without evidence)
+  → evidence validation + report-quality checks
+  → Markdown report (incomplete-marked if anything is missing)
+  → human review queue  (duplicates surfaced; report editable, original immutable)
+  → human approval  → APPROVED_FOR_SUBMISSION
+  → [operator submits manually — no auto-submission]
+```
+
+Every outbound request in that chain passes the scope engine, rate limits,
+required headers, and active-testing controls; the LLM (if enabled) only reorders
+sanitized candidate data; and only a human can approve.
+
 ## Testing
 
 `pytest` covers, in unit tests (mocked transport, no sockets):
@@ -403,6 +478,14 @@ reorder, malformed response, invented candidate, modified endpoint/target/method
 rejection, faithful-echo acceptance, `max_candidates` truncation, secret
 scrubbing + key stripping, prompt-contains-no-secrets, LLM-disabled default, and
 deterministic fallback (with and without fallback enabled).
+
+Plus **review workflow** tests: verified finding enters the queue, invalid/
+corrupt evidence blocks report generation, missing fields prevent approval, human
+approval succeeds, the agent cannot approve, a rejected finding cannot be
+submitted, edited reports preserve the immutable original, duplicates are
+surfaced, reports contain only verified evidence, incomplete reports are marked
+(not guessed), the CHANGES_REQUESTED round-trip keeps the original, and the
+review/approve CLI (with interactive confirmation) works end to end.
 
 ## Roadmap (not yet implemented)
 
