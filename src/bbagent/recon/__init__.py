@@ -6,5 +6,6 @@ through the scope-enforcing HTTP client, so discovery is scope-bounded too.
 """
 
 from bbagent.recon.discovery import discover_from_manifest
+from bbagent.recon.mapper import AttackSurfaceMapper
 
-__all__ = ["discover_from_manifest"]
+__all__ = ["discover_from_manifest", "AttackSurfaceMapper"]

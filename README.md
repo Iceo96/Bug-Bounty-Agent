@@ -180,6 +180,63 @@ This starts the lab in-process, runs discovery → verification → report, and
 writes one Markdown report per verified finding into `.\reports\` (git-ignored).
 It prints the path of each report it writes.
 
+## Attack-surface mapper
+
+The mapper turns authorized discovery into a **persistent, queryable graph** in
+SQLite that a future planner can reason over. It drives everything through the
+existing `AuthorizedHTTPClient`, so scope, rate limits, required headers, and
+active-testing controls all apply; it issues **GET only** and refuses ambiguous
+or out-of-scope targets.
+
+What it records (all deduplicated, with `first_seen`/`last_seen`):
+
+- **Assets** — scheme, host, port, URL, status, title, content type, technologies
+- **Endpoints** — method, normalized URL, path, query/path params, request/response
+  content types, observed status codes, and a `confirmed` flag (candidates from JS
+  are unconfirmed until a real request is made)
+- **JavaScript** — downloaded files with SHA-256, size, and the page that loaded them
+- **API endpoints** — tracked separately (base, path, method, params, responses)
+- **Parameters** — query/path/body/form, with their source
+- **Object references** — numeric / UUID / hex / path / JSON-id **candidates only**
+  (never called an IDOR)
+- **Authentication contexts** — how each endpoint responded when *unauthenticated*,
+  *as identity A*, and *as identity B* (recorded as observations; no authz decision
+  is inferred from status codes)
+- **Relationships** — `asset → js`, `asset → endpoint`, `js → endpoint`, plus the
+  FK links endpoint → parameter / object-ref / auth-observation, so the planner can
+  walk host → page → JS → endpoint → parameter → object-ref → auth-context.
+
+### Run the mapper (Windows, against the local lab)
+
+Start the lab in one terminal (`... -m bbagent_lab.server --port 8000`), then in
+another (the tokens let the mapper probe identities A and B):
+
+```powershell
+$env:BBAGENT_LAB_TOKEN_A = "tok_test_a_11111111"
+$env:BBAGENT_LAB_TOKEN_B = "tok_test_b_22222222"
+
+# Discover from the manifest and crawl the HTML site into a DB:
+.venv\Scripts\python.exe -m bbagent.cli --db data\lab.db recon programs\lab.yaml `
+    --manifest http://127.0.0.1:8000/ --crawl http://127.0.0.1:8000/site
+
+# Query the persisted attack surface:
+.venv\Scripts\python.exe -m bbagent.cli --db data\lab.db assets "Local Vulnerable Lab"
+.venv\Scripts\python.exe -m bbagent.cli --db data\lab.db endpoints "Local Vulnerable Lab"
+.venv\Scripts\python.exe -m bbagent.cli --db data\lab.db attack-surface "Local Vulnerable Lab" --json
+```
+
+`--json` on `assets` / `endpoints` / `attack-surface` emits a machine-readable
+snapshot for the planner; without it you get a human-readable summary. Read
+commands accept a program **name** or a path to its config file. Example
+`endpoints` output:
+
+```
+GET http://127.0.0.1:8000/api/notes/note-a1
+    source=manifest confirmed authn=required status=[200]
+    object-refs: note-a1(json_id),note-a1(path_id)
+    auth-observations: identity_a=[200]; identity_b=[200]; unauthenticated=[401]
+```
+
 ## Testing
 
 `pytest` covers, in unit tests (mocked transport, no sockets):
@@ -194,10 +251,18 @@ captured and its hashes stay valid, a finding cannot exist without evidence,
 scope rules still apply (non-loopback denied), and every touched/recorded target
 is loopback (no external requests).
 
+Plus **attack-surface mapper** tests (unit + lab integration): asset/endpoint
+discovery, HTML crawling, JavaScript discovery, API-candidate and parameter
+extraction, object-reference detection, dedup across runs, authentication-context
+tracking, scope enforcement, excluded-target handling, loopback-only behavior,
+and the CLI recon → query round-trip.
+
 ## Roadmap (not yet implemented)
 
-- Broader recon (asset/HTTP/JS/API/param discovery, tech fingerprinting) beyond
-  the current manifest-based endpoint discovery
-- Attack-surface mapper persistence beyond the core tables
 - Additional detectors (XSS, SSRF, SQLi, path traversal, upload, auth, biz-logic)
-- The controlled-tool LLM brain
+- The controlled-tool LLM brain / autonomous testing planner
+
+The pipeline now supports: **program → authorized discovery → persistent
+attack-surface graph → queryable assets / endpoints / parameters / object-refs /
+auth-contexts**, which is the substrate an autonomous vulnerability-testing
+planner will consume next.

@@ -27,6 +27,50 @@ _JSON = [("Content-Type", "application/json")]
 _NOTE_RE = re.compile(r"^/api/notes/(?P<id>[^/]+)$")
 _PROFILE_RE = re.compile(r"^/api/profile/(?P<id>[^/]+)$")
 
+# A small HTML site + JS bundle so the mapper can exercise real crawling and
+# JavaScript discovery over the loopback socket.
+_SITE_INDEX = """<!doctype html>
+<html><head><title>Lab Portal</title>
+<script src="/static/app.js"></script></head>
+<body>
+  <h1>Lab Portal</h1>
+  <a href="/site/about">About</a>
+  <a href="/site/notes">Notes</a>
+  <form action="/api/search" method="get">
+    <input name="q"><input name="page"><input name="limit">
+  </form>
+</body></html>"""
+
+_SITE_ABOUT = """<!doctype html>
+<html><head><title>About</title></head>
+<body><a href="/site">Home</a><p>About this lab.</p></body></html>"""
+
+_SITE_NOTES = """<!doctype html>
+<html><head><title>Notes</title></head>
+<body><a href="/site">Home</a></body></html>"""
+
+# The JS references API paths and a parameterized URL — candidates only.
+_APP_JS = """
+const API_BASE = "/api";
+async function loadNote(id) { return fetch(`/api/notes/${id}`).then(r => r.json()); }
+async function search(q) { return fetch("/api/v1/users?role=admin&limit=50&sort=name"); }
+const profileUrl = "/api/profile/1001";
+"""
+
+
+def _html(start_response, status: str, body_text: str) -> Iterable[bytes]:
+    body = body_text.encode("utf-8")
+    start_response(status, [("Content-Type", "text/html; charset=utf-8"),
+                            ("Content-Length", str(len(body)))])
+    return [body]
+
+
+def _js(start_response, body_text: str) -> Iterable[bytes]:
+    body = body_text.encode("utf-8")
+    start_response("200 OK", [("Content-Type", "application/javascript"),
+                              ("Content-Length", str(len(body)))])
+    return [body]
+
 
 def _resp(start_response, status: str, payload: dict) -> Iterable[bytes]:
     body = json.dumps(payload).encode("utf-8")
@@ -82,6 +126,16 @@ def create_app() -> Callable:
 
         if path == "/":
             return _resp(start_response, "200 OK", _manifest())
+
+        # --- Static HTML site + JS (unauthenticated, for crawl/JS discovery). ----
+        if path == "/site":
+            return _html(start_response, "200 OK", _SITE_INDEX)
+        if path == "/site/about":
+            return _html(start_response, "200 OK", _SITE_ABOUT)
+        if path == "/site/notes":
+            return _html(start_response, "200 OK", _SITE_NOTES)
+        if path == "/static/app.js":
+            return _js(start_response, _APP_JS)
 
         # Everything under /api requires authentication.
         identity = _authenticate(environ)
