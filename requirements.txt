@@ -1,0 +1,9 @@
+# Runtime dependencies (see pyproject.toml for the authoritative list).
+pydantic>=2.6
+pyyaml>=6.0
+httpx>=0.27
+structlog>=24.1
+python-dotenv>=1.0
+
+# Development / testing:
+#   pip install -e ".[dev]"

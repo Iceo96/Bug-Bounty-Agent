@@ -1,0 +1,51 @@
+# Example program configuration (SAFE — points only at local test targets).
+# Copy this file per engagement. `authorized` must be explicitly true to load.
+name: "Local Test Lab"
+platform: "local"
+authorized: true
+
+scope:
+  in_scope:
+    - kind: domain
+      value: "localhost"
+    - kind: wildcard
+      value: "*.test.localhost"
+    - kind: url_prefix
+      value: "http://127.0.0.1:8000/app/"
+  excluded:
+    - kind: domain
+      value: "admin.test.localhost"
+      note: "Explicitly out of scope per program rules."
+
+restrictions:
+  allow_active_testing: true
+  allowed_methods: ["GET", "HEAD", "OPTIONS", "POST"]
+  forbidden_paths:
+    - "/admin/delete"
+    - "/billing"
+  no_automated_scanning: false
+  no_dos: true
+  notes:
+    - "Non-destructive testing only."
+    - "Use provided test accounts; do not attempt to access real user data."
+
+required_headers:
+  X-Bug-Bounty: "researcher-handle"       # program-required identifying header
+
+rate_limit:
+  requests_per_second: 2.0
+  max_concurrent: 4
+  per_host: true
+
+test_accounts:
+  - label: "user_a"
+    role: "user"
+    username: "alice@example.test"
+    secret_env: "BBAGENT_ACCT_A_PASS"      # secret comes from env, never here
+  - label: "user_b"
+    role: "user"
+    username: "bob@example.test"
+    secret_env: "BBAGENT_ACCT_B_PASS"
+
+notes:
+  - "This is a template pointing only at local hosts. Never point it at a target you are not authorized to test."
