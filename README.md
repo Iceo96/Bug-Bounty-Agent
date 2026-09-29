@@ -609,6 +609,33 @@ Policy config lives in the program (`allowed_tools`, `allowed_vulnerability_clas
 scope/exclusions/methods/required-headers/test-accounts). Secrets stay in
 environment variables referenced by handle — never in YAML, never in decisions.
 
+### Real-program policy adapter (dry-run / validation only)
+
+A real program's *explicitly published* rules are represented as a `ProgramConfig`
+— never scraped, guessed, or inferred. Two config-only, network-free commands
+operate on it:
+
+```powershell
+# Validate a program's policy (fail-closed): scope, exclusions, methods, headers,
+# identities, tools, vuln classes, forbidden actions, budgets, conflicts,
+# ambiguities, and NEEDS_HUMAN_REVIEW markers. Exit code 1 when NOT READY.
+.venv\Scripts\python.exe -m bbagent.cli policy-check programs\real-program.example.yaml
+
+# Dry-run: show the policy decision for each hypothetical action WITHOUT sending
+# anything (target, method, identity, vuln class, tool, ALLOW/DENY, reason).
+.venv\Scripts\python.exe -m bbagent.cli policy-simulate programs\real-program.example.yaml `
+    --actions actions.yaml
+```
+
+`programs/real-program.example.yaml` is a **fail-closed template**: since no
+published rules were supplied, every program-specific permission is marked
+`NEEDS_HUMAN_REVIEW`, `allowed_tools`/`allowed_vulnerability_classes`/`request_budget`
+are empty (ambiguous → NOT READY), and `dry_run_only: true` makes the HTTP client
+**permanently block every outbound request** for that configuration — independent
+of the `BBAGENT_DRY_RUN` env switch. `policy-check` reports NOT READY until a human
+fills each field from the program's published rules; `validate_policy` fails closed
+on any ambiguity, conflict, or review marker and never invents a permission.
+
 ### Local Bug Bounty Program Simulator
 
 `bbagent_lab/simulator.py` builds a fully local, synthetic program
@@ -727,6 +754,14 @@ Plus the **autonomous run** test: a single orchestrated run against the simulato
 discovers the full surface and verifies one finding per class across all four
 detectors (with valid evidence, all queued for human review), and denies an
 out-of-scope discovery manifest.
+
+Plus **policy-adapter** tests: `validate_policy` fails closed on missing/empty
+`allowed_tools`/`allowed_vulnerability_classes`/`request_budget`, unknown tools or
+vuln classes, in-scope-also-excluded, active-methods-without-active-testing,
+auth-required-without-identities, and `NEEDS_HUMAN_REVIEW` markers; the real-program
+template validates as NOT READY; dry-run simulation reports per-action decisions
+with **no network**; and a `dry_run_only` program blocks real execution even when
+policy would ALLOW (counting transport proves zero requests).
 
 Plus **adversarial policy-hardening** tests: every DENY path is driven through the
 router with a counting transport proving the HTTP execution layer is **never

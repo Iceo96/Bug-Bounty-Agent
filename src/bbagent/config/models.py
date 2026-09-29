@@ -168,6 +168,12 @@ class ProgramConfig(BaseModel):
     forbidden_actions: list[str] = Field(default_factory=list)
     allow_unauthenticated: bool = True
     request_budget: Optional[PolicyBudget] = None
+    # Permanent dry-run: when true, the HTTP client blocks ALL outbound requests
+    # regardless of the environment kill switch. Used by real-program adapters.
+    dry_run_only: bool = False
+    # Aspects that could not be represented safely from published rules and must
+    # be resolved by a human before the program is considered ready to run.
+    needs_human_review: list[str] = Field(default_factory=list)
     notes: list[str] = Field(default_factory=list)
 
     @model_validator(mode="after")

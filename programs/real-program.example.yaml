@@ -1,0 +1,61 @@
+# =============================================================================
+# REAL-PROGRAM POLICY TEMPLATE — FAIL CLOSED, PERMANENTLY DRY-RUN
+# =============================================================================
+# This file represents a real Bug Bounty program's rules AS CONFIGURATION.
+#
+# No published program rules were supplied as project input, so NOTHING here is
+# a real permission. Every program-specific value is a PLACEHOLDER and every
+# permission is marked NEEDS_HUMAN_REVIEW. `policy-check` will report NOT READY
+# until a human fills these fields from the program's *explicitly published*
+# rules. Permissions are never invented or inferred.
+#
+# The program is dry_run_only: the HTTP client blocks ALL outbound requests for
+# this configuration, permanently, regardless of any environment setting.
+# =============================================================================
+
+name: "REAL-PROGRAM-TEMPLATE (fill from published rules)"
+platform: "unspecified"
+
+# The operator MUST confirm real, written authorization before removing the
+# needs_human_review marker below. This flag only allows the file to load.
+authorized: true
+
+# Permanent dry-run for this task: no request can ever be sent.
+dry_run_only: true
+
+scope:
+  in_scope:
+    - kind: domain
+      value: "127.0.0.1"     # PLACEHOLDER — replace with published in-scope assets
+  excluded: []               # NEEDS_HUMAN_REVIEW — fill from published exclusions
+
+restrictions:
+  allow_active_testing: false
+  allowed_methods: ["GET"]   # NEEDS_HUMAN_REVIEW — only methods the program permits
+  forbidden_paths: []        # NEEDS_HUMAN_REVIEW — published excluded paths
+
+required_headers: {}         # NEEDS_HUMAN_REVIEW — program-required research header(s)
+
+test_accounts: []            # NEEDS_HUMAN_REVIEW — only explicitly authorized identities
+
+allowed_tools: []                     # NEEDS_HUMAN_REVIEW — no tool runs until confirmed
+allowed_vulnerability_classes: []     # NEEDS_HUMAN_REVIEW — must be explicit
+forbidden_actions: []                 # NEEDS_HUMAN_REVIEW — program's prohibited actions
+allow_unauthenticated: true
+request_budget: null                  # NEEDS_HUMAN_REVIEW — must be explicit (no unbounded runs)
+
+needs_human_review:
+  - "confirm-written-authorization-with-program"
+  - "in-scope-assets (from published rules)"
+  - "excluded-assets-and-paths (from published rules)"
+  - "allowed-http-methods (from published rules)"
+  - "required-research-headers (from published rules)"
+  - "authorized-test-identities (from published rules)"
+  - "allowed-tools (from published rules)"
+  - "allowed-vulnerability-classes (from published rules)"
+  - "request-budget-and-rate-limits (from published rules)"
+
+notes:
+  - "FAIL-CLOSED template. No real program rules were supplied as input."
+  - "policy-check reports NOT READY until a human fills every field above."
+  - "dry_run_only=true guarantees zero outbound requests for this configuration."

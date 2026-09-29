@@ -93,6 +93,8 @@ class AuthorizedHTTPClient:
 
         if os.getenv("BBAGENT_DRY_RUN", "0") == "1":
             raise RequestBlocked("BBAGENT_DRY_RUN is set — all outbound requests are blocked")
+        if getattr(self._program, "dry_run_only", False):
+            raise RequestBlocked("program is dry-run-only — outbound requests are permanently blocked")
 
         # Scope is checked first and always.
         try:

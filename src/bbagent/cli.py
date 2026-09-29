@@ -73,6 +73,30 @@ def _cap_title(vuln_class: str) -> str:
     }.get(vuln_class, vuln_class)
 
 
+def _load_actions(path: str):
+    """Load a YAML/JSON file with a top-level 'actions' list for simulation."""
+    import json as _json
+    from pathlib import Path as _Path
+
+    import yaml as _yaml
+
+    p = _Path(path)
+    if not p.is_file():
+        print(f"error: actions file not found: {path}", file=sys.stderr)
+        return None
+    raw = p.read_text(encoding="utf-8")
+    try:
+        data = _yaml.safe_load(raw) if p.suffix.lower() in (".yaml", ".yml") else _json.loads(raw)
+    except Exception as exc:  # noqa: BLE001
+        print(f"error: could not parse actions file: {exc}", file=sys.stderr)
+        return None
+    actions = data.get("actions") if isinstance(data, dict) else data
+    if not isinstance(actions, list):
+        print("error: actions file must contain an 'actions' list", file=sys.stderr)
+        return None
+    return actions
+
+
 def _reviewer_name(explicit: str | None) -> str:
     name = explicit or os.getenv("USERNAME") or os.getenv("USER") or "operator"
     if name == "agent":
@@ -257,6 +281,14 @@ def main(argv: list[str] | None = None) -> int:
     p_scope.add_argument("config")
     p_scope.add_argument("url")
 
+    p_polcheck = sub.add_parser("policy-check", help="Validate a program policy (fail-closed)")
+    p_polcheck.add_argument("config")
+
+    p_polsim = sub.add_parser("policy-simulate",
+                              help="Dry-run: show policy decisions for hypothetical actions (no network)")
+    p_polsim.add_argument("config")
+    p_polsim.add_argument("--actions", required=True, help="YAML/JSON file with an 'actions' list")
+
     p_recon = sub.add_parser("recon", help="Run authorized discovery into the DB")
     p_recon.add_argument("config")
     p_recon.add_argument("--manifest", help="Discovery manifest URL (in scope)")
@@ -318,6 +350,28 @@ def main(argv: list[str] | None = None) -> int:
 
     args = parser.parse_args(argv)
     db_path = args.db or _default_db()
+
+    # Policy adapter commands (config-only; NO network).
+    if args.cmd in ("policy-check", "policy-simulate"):
+        from bbagent.policy.validation import simulate, validate_policy
+        try:
+            program = ProgramManager.from_file(args.config)
+        except ProgramConfigError as exc:
+            print(f"error: {exc}", file=sys.stderr)
+            return 2
+        if args.cmd == "policy-check":
+            report = validate_policy(program)
+            print(report.render())
+            return 0 if report.ready else 1
+        # policy-simulate
+        actions = _load_actions(args.actions)
+        if actions is None:
+            return 2
+        print(f"# Dry-run simulation: {program.name}  (dry_run_only={program.config.dry_run_only})")
+        print("# No network requests are made; decisions are policy-only.\n")
+        for d in simulate(program, actions):
+            print(d.render())
+        return 0
 
     # Config-only commands.
     if args.cmd in ("validate", "scope"):
