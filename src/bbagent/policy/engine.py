@@ -54,9 +54,19 @@ class ProgramPolicyEngine:
 
     # --- evaluation -----------------------------------------------------------
 
+    def _effective_target(self, req: "ToolRequest") -> str | None:
+        """The target used for scope and per-target budget accounting."""
+        if req.target:
+            return req.target
+        if req.tool == "http":
+            url = req.arguments.get("url")
+            return url if isinstance(url, str) else None
+        return None
+
     def evaluate(self, req: "ToolRequest") -> PolicyDecision:
         cfg = self.program.config
-        action = req.requested_action or (req.arguments.get("method", "") if req.tool == "http" else "")
+        action = req.requested_action or (
+            str(req.arguments.get("method", "")) if req.tool == "http" else "")
 
         def deny(reason: str, rule: str = "") -> PolicyDecision:
             d = PolicyDecision(False, reason, req.tool, action, req.target, rule,
@@ -111,7 +121,7 @@ class ProgramPolicyEngine:
         # 6) Budget (stricter of total / per-target / per-tool wins).
         budget = cfg.request_budget
         if budget is not None:
-            tgt = req.target or "*"
+            tgt = self._effective_target(req) or "*"
             if self._total + 1 > budget.total:
                 return deny(f"total request budget exhausted ({budget.total})", "request_budget.total")
             if self._per_target.get(tgt, 0) + 1 > budget.per_target:
@@ -157,7 +167,7 @@ class ProgramPolicyEngine:
         """Count an allowed+dispatched request against the policy budget."""
         self._total += 1
         self._per_tool[req.tool] = self._per_tool.get(req.tool, 0) + 1
-        tgt = req.target or "*"
+        tgt = self._effective_target(req) or "*"
         self._per_target[tgt] = self._per_target.get(tgt, 0) + 1
 
     @property

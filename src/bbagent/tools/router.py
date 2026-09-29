@@ -8,6 +8,7 @@ server-side, and execute. Denied or malformed requests never reach a tool.
 
 from __future__ import annotations
 
+from bbagent.http.client import RequestBlocked
 from bbagent.logging_config import get_logger
 from bbagent.policy.engine import ProgramPolicyEngine
 from bbagent.tools.base import ToolError, ToolRequest, ToolResult
@@ -61,6 +62,12 @@ class ToolRouter:
 
         try:
             sanitized = await tool.execute(args, self._ctx)
+        except RequestBlocked as exc:
+            # Defense in depth: the client refused (e.g. dry-run kill switch, or a
+            # scope block the policy layer somehow missed). Nothing was sent.
+            log.warning("tool.client_blocked", tool=req.tool, reason=str(exc))
+            return ToolResult(tool=req.tool, success=False, action=decision.action,
+                              target=req.target, denied_reason=f"blocked by client: {exc}")
         except ToolError as exc:
             return ToolResult(tool=req.tool, success=False, action=decision.action,
                               target=req.target, error=str(exc))

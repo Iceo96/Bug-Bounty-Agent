@@ -48,6 +48,10 @@ class DeterministicPlanner(Planner):
     def plan(self, ctx: PlanContext) -> list[PlannedHypothesis]:
         program_name = ctx.program.name
         candidates: dict[str, PlannedHypothesis] = {}
+        # Respect a program's vulnerability-class allowlist when one is declared.
+        # (Empty = no planner-level restriction, so existing programs are unchanged;
+        # the policy engine still fail-closes on explicit tool requests.)
+        allowed_classes = set(ctx.program.config.allowed_vulnerability_classes)
 
         for ep in ctx.surface.list_endpoints(program_name):
             view = EndpointView(
@@ -60,6 +64,8 @@ class DeterministicPlanner(Planner):
             template = templatize_path(urlsplit(ep.url).path or "/")
 
             for cap in ctx.capabilities.all():
+                if allowed_classes and cap.vuln_class not in allowed_classes:
+                    continue  # program forbids this vulnerability class
                 cand = cap.propose(view, ctx.program)
                 if cand is None:
                     continue

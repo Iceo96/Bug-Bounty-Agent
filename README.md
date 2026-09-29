@@ -728,6 +728,16 @@ discovers the full surface and verifies one finding per class across all four
 detectors (with valid evidence, all queued for human review), and denies an
 out-of-scope discovery manifest.
 
+Plus **adversarial policy-hardening** tests: every DENY path is driven through the
+router with a counting transport proving the HTTP execution layer is **never
+called** on a denial (out-of-scope, excluded path/host, unauthorized identity,
+required-header override, forbidden method, forbidden vuln class, exhausted
+budget, unknown tool, invalid targets/identities, malformed arguments,
+active-testing and dry-run blocks); malformed/malicious LLM requests cannot
+smuggle fields (`ToolRequest`/`HttpArgs` reject extras); program config (scope,
+exclusions, allowed tools/classes, identities, budgets) is immutable across
+requests; and the planner refuses to plan a forbidden vulnerability class.
+
 Plus **tool-layer + policy** tests: tool registration/schema, unknown tool,
 malformed arguments, `ToolRequest` rejecting unknown fields, and every policy
 decision (allow in-scope; deny out-of-scope, excluded path, forbidden method,
