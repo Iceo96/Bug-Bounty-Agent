@@ -627,6 +627,20 @@ operate on it:
     --actions actions.yaml
 ```
 
+`programs/wolt.yaml` is a real example built **only** from the Wolt program's
+supplied published rules: the full in-scope set (incl. `*.wolt.com`), every
+explicit exclusion (hosts, `*.pipedrive.com`, Typeform, and specific URLs/paths),
+the forbidden-POST endpoints (represented as full-URL exclusions — stricter), the
+required `X-HackerOne-Research` header as an **env reference** (`BBAGENT_H1_USERNAME`,
+never hardcoded), the single authorized `consumer_test` identity (courier/merchant
+absent), and all do-not-test / non-eligible web & mobile categories as
+`forbidden_actions`. Everything the rules do **not** explicitly grant — allowed
+methods, rate limits/budgets, tool/automation permission, which detector classes
+are permitted, unauthenticated testing, `blog.wolt.com` WordPress-only probes, and
+venue/account data-scoping — is left empty and listed under `needs_human_review`,
+so `policy-check` reports **NOT READY** and `dry_run_only: true` blocks every
+request. It is a policy artifact only; nothing is ever sent to Wolt.
+
 `programs/real-program.example.yaml` is a **fail-closed template**: since no
 published rules were supplied, every program-specific permission is marked
 `NEEDS_HUMAN_REVIEW`, `allowed_tools`/`allowed_vulnerability_classes`/`request_budget`

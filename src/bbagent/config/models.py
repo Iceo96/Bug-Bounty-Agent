@@ -157,7 +157,15 @@ class ProgramConfig(BaseModel):
     restrictions: TestingRestrictions = Field(default_factory=TestingRestrictions)
     required_headers: dict[str, str] = Field(
         default_factory=dict,
-        description="Headers the program requires on every request (e.g. an identifying header).",
+        description="Headers the program requires on every request (literal values).",
+    )
+    required_header_refs: dict[str, str] = Field(
+        default_factory=dict,
+        description=(
+            "Required headers whose value is resolved from an environment variable at "
+            "runtime (header name -> env var name). Used for secrets like an H1 username "
+            "that must NOT be hardcoded. The agent/LLM can never set or override these."
+        ),
     )
     rate_limit: RateLimit = Field(default_factory=RateLimit)
     test_accounts: list[TestAccount] = Field(default_factory=list)

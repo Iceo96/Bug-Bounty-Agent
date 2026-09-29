@@ -1,0 +1,150 @@
+# =============================================================================
+# Wolt Bug Bounty program — ProgramPolicy built ONLY from the supplied published
+# rules. FAIL CLOSED. Permanently dry-run. No permission is invented.
+#
+# Anything the rules do not explicitly grant (HTTP methods, rate limits, request
+# budgets, automation/tooling permission, which detector classes are permitted,
+# extra identities) is left empty and listed under needs_human_review, so
+# `policy-check` reports NOT READY. This is intentional.
+# =============================================================================
+
+name: "wolt-bug-bounty"
+platform: "hackerone"
+authorized: true
+dry_run_only: true          # permanently blocks all outbound requests
+
+scope:
+  in_scope:
+    - {kind: domain,   value: "wolt.com"}
+    - {kind: domain,   value: "restaurant-api.wolt.com"}
+    - {kind: domain,   value: "ops.wolt.com"}
+    - {kind: domain,   value: "merchant.wolt.com"}
+    - {kind: domain,   value: "drive.wolt.com"}
+    - {kind: domain,   value: "corporate.wolt.com"}
+    - {kind: domain,   value: "authentication.wolt.com"}
+    - {kind: wildcard, value: "*.wolt.com"}     # subdomains, except the exclusions below
+
+  excluded:
+    # Excluded hosts (exclusions always win over the wildcard).
+    - {kind: domain,   value: "wolt.atlassian.net"}
+    - {kind: domain,   value: "press.wolt.com"}
+    - {kind: domain,   value: "links.wolt.com"}
+    - {kind: domain,   value: "wolt.typeform.com"}     # https://wolt.typeform.com
+    - {kind: domain,   value: "gettest.wolt.com"}
+    - {kind: wildcard, value: "*.pipedrive.com"}
+    - {kind: domain,   value: "blog.wolt.com"}          # see needs_human_review (WordPress-only)
+    # Excluded specific URLs / paths.
+    - {kind: url_prefix, value: "https://wolt.com/en/wolt-for-work-contact-request"}
+    - {kind: url_prefix, value: "https://restaurant-api.wolt.com/v1/waw-api/corporate-leads"}
+    - {kind: url_prefix, value: "https://merchant.wolt.com/app/partner-with-wolt"}
+    - {kind: url_prefix, value: "https://merchant.wolt.com/api/merchant-onboarding/merchant-admin/inbound-merchant"}
+    - {kind: url_prefix, value: "https://merchant-onboarding-service.wolt.com/merchant-admin/inbound-merchant"}
+
+restrictions:
+  # Allowed HTTP methods are NOT stated in the published rules -> empty (fail-closed).
+  allowed_methods: []
+  allow_active_testing: false
+  # The three "POST must not be sent to" endpoints are represented above as full
+  # URL exclusions (stricter: ALL methods to them are denied). Documented here too.
+  forbidden_paths:
+    - "/v1/waw-api/corporate-leads"
+    - "/app/partner-with-wolt"
+    - "/api/merchant-onboarding/merchant-admin/inbound-merchant"
+    - "/merchant-admin/inbound-merchant"
+
+# Program-required research header. The H1 username is resolved from the
+# environment at runtime and is NEVER hardcoded here. The agent/LLM cannot set
+# or override it.
+required_header_refs:
+  X-HackerOne-Research: "BBAGENT_H1_USERNAME"
+
+# Only explicitly authorized identities. Courier and Merchant/business accounts
+# are NOT available per the rules, so they are absent (any such identity is denied).
+test_accounts:
+  - label: "consumer_test"
+    role: "consumer"
+    username: "user_id:670fa3e9ead6e49d65cc3614"   # data identifier, not a credential
+    notes: "Self-registered consumer test account. Use ONLY this user's own data."
+
+# Whether unauthenticated testing is permitted is NOT stated -> fail closed.
+allow_unauthenticated: false
+
+# Automation/tooling permission is NOT granted by the rules -> empty (fail-closed).
+allowed_tools: []
+
+# The rules do NOT explicitly permit any of our detector classes. Absence of a
+# prohibition is NOT permission -> empty (fail-closed / needs human review).
+allowed_vulnerability_classes: []
+
+# No numeric rate limits or request budgets are stated -> null (fail-closed).
+request_budget: null
+
+# Program-declared out-of-scope categories (do-not-test + non-eligible findings).
+# Preserved verbatim as slugs; never converted into permissions.
+forbidden_actions:
+  # Section 10 — do not test:
+  - "payment-processors"
+  - "spam"
+  - "social-engineering"
+  - "physical-intrusion"
+  - "customer-support-social-engineering"
+  - "dos"
+  - "ddos"
+  - "web-cache-poisoning-dos"
+  - "brute-force"
+  - "attacks-requiring-victim-device-access"
+  - "mass-entity-creation"
+  - "third-party-leaked-human-credentials"
+  # Section 11 — web finding exclusions:
+  - "web:api-key-disclosure-without-impact"
+  - "web:unverified-mobile-signup-without-takeover"
+  - "web:verbose-errors-without-sensitive-disclosure"
+  - "web:cors-without-impact"
+  - "web:missing-cookie-flags"
+  - "web:missing-security-headers"
+  - "web:csrf-without-impact"
+  - "web:autocomplete"
+  - "web:rate-limit-bypass-or-absence"
+  - "web:password-best-practice-violations"
+  - "web:clickjacking-without-impact"
+  - "web:csv-injection"
+  - "web:session-invalidation"
+  - "web:content-injection-without-html-modification"
+  - "web:username-email-enumeration"
+  - "web:email-bombing"
+  - "web:request-smuggling-without-impact"
+  - "web:homograph-attacks"
+  - "web:banner-version-disclosure"
+  - "web:subdomain-takeover-without-proof"
+  - "web:arbitrary-file-upload-without-proof"
+  - "web:host-header-injection-without-impact"
+  # Section 12 — mobile finding exclusions:
+  - "mobile:clipboard-shared-links"
+  - "mobile:malicious-app-required"
+  - "mobile:sensitive-data-in-urls-over-tls"
+  - "mobile:lack-of-obfuscation"
+  - "mobile:path-disclosure-in-binary"
+  - "mobile:lack-of-jailbreak-root-detection"
+  - "mobile:malformed-url-scheme-crash"
+  - "mobile:lack-of-binary-protection"
+  - "mobile:snapshot-pasteboard-leakage"
+  - "mobile:runtime-hacking-jailbroken"
+
+needs_human_review:
+  - "confirm-written-authorization-and-H1-username-env (BBAGENT_H1_USERNAME)"
+  - "allowed-http-methods — not stated in published rules"
+  - "request-budget-and-numeric-rate-limits — not stated"
+  - "automation/tooling permission (allowed_tools) — not granted by rules"
+  - "which detector vulnerability_classes are explicitly permitted — absence != permission"
+  - "whether-unauthenticated-testing-is-permitted (allow_unauthenticated)"
+  - "blog.wolt.com: 'WordPress-level probes only' not representable — currently FULLY excluded"
+  - "venue-data-scoping: venue_id=670e7897e3c56dcc5b5a0989 and venue URL restriction (https://wolt.com/en/fin/helsinki/venue/test-670e7897e3c56dcc5b5a0989-sh0p) not modeled by schema"
+  - "consumer test data-scoping: user_id=670fa3e9ead6e49d65cc3614 — data-level ownership not enforced by schema"
+  - "account/data ownership rule (own accounts/data only) not modeled by schema"
+  - "per-endpoint POST prohibition represented via full URL exclusion (stricter) — confirm acceptable"
+
+notes:
+  - "Detailed, reproducible reports are required by the program (process rule)."
+  - "One vulnerability per report unless chaining is required for impact (process rule)."
+  - "Courier account and Merchant/business account are NOT available (absent from identities)."
+  - "Customer account can be self-registered; only the listed consumer test data may be used."

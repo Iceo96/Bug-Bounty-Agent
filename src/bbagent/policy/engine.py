@@ -154,11 +154,15 @@ class ProgramPolicyEngine:
             if frag and frag in path:
                 return deny(f"target path matches exclusion fragment {frag!r}", "exclusions")
 
-        # The LLM may not override a required header's value.
+        # The LLM may not override a literal required header's value...
         req_headers = {k.lower(): v for k, v in (req.arguments.get("headers") or {}).items()}
         for hk, hv in cfg.required_headers.items():
             if hk.lower() in req_headers and req_headers[hk.lower()] != hv:
                 return deny(f"cannot override required header {hk!r}", "required_headers")
+        # ...nor set an env-referenced required header at all (value is injected).
+        for hk in getattr(cfg, "required_header_refs", {}):
+            if hk.lower() in req_headers:
+                return deny(f"cannot set env-injected required header {hk!r}", "required_headers")
         return None
 
     # --- budget accounting ----------------------------------------------------

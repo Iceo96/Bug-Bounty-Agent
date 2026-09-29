@@ -117,9 +117,15 @@ class AuthorizedHTTPClient:
             raise RequestBlocked(f"active method {method} blocked: program is passive-only")
 
     def _merge_headers(self, headers: Optional[Mapping[str, str]]) -> dict[str, str]:
-        merged: dict[str, str] = dict(self._program.required_headers)
-        if headers:
-            merged.update(headers)
+        # Caller-supplied first, then program-required headers OVERWRITE them so a
+        # required header can never be removed or overridden. Env-referenced
+        # required headers are resolved last (values never come from the caller/LLM).
+        merged: dict[str, str] = dict(headers or {})
+        merged.update(self._program.required_headers)
+        for name, env_var in getattr(self._program, "required_header_refs", {}).items():
+            value = os.getenv(env_var)
+            if value is not None:
+                merged[name] = value
         return merged
 
     # --- request ---------------------------------------------------------------

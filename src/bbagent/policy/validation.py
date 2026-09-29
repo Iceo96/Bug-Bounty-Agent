@@ -78,7 +78,7 @@ def validate_policy(program: ProgramManager) -> PolicyValidationReport:
         "forbidden_paths": list(cfg.restrictions.forbidden_paths),
         "allowed_methods": list(cfg.restrictions.allowed_methods),
         "allow_active_testing": cfg.restrictions.allow_active_testing,
-        "required_headers": sorted(cfg.required_headers.keys()),
+        "required_headers": sorted(set(cfg.required_headers) | set(cfg.required_header_refs)),
         "identities": [a.label for a in cfg.test_accounts],
         "allowed_tools": list(cfg.allowed_tools),
         "allowed_vulnerability_classes": list(cfg.allowed_vulnerability_classes),
@@ -105,6 +105,10 @@ def validate_policy(program: ProgramManager) -> PolicyValidationReport:
     for vc in cfg.allowed_vulnerability_classes:
         if vc not in known_vuln_classes():
             conflicts.append(f"allowed vulnerability class '{vc}' is unknown {sorted(known_vuln_classes())}")
+
+    # Allowed HTTP methods must be explicit.
+    if not cfg.restrictions.allowed_methods:
+        ambiguities.append("no allowed_methods configured — every HTTP method denied (fail-closed)")
 
     # Budgets must be explicit (unbounded testing is unsafe for a real program).
     if cfg.request_budget is None:
@@ -148,12 +152,14 @@ class SimulatedDecision:
     would_execute: bool
     reason: str
     matched_rule: str
+    scope: str = "n/a"   # in_scope | excluded | out_of_scope | n/a (independent check)
 
     def render(self) -> str:
         verdict = "ALLOW" if self.allowed else "DENY"
         exe = "would-execute" if self.would_execute else "NOT-executed (dry-run/denied)"
+        scope = f" scope={self.scope}" if self.scope != "n/a" else ""
         return (f"[{verdict}] {self.tool} {self.method or ''} {self.target or ''} "
-                f"identity={self.identity or '-'} class={self.vuln_class or '-'} "
+                f"identity={self.identity or '-'} class={self.vuln_class or '-'}{scope} "
                 f"-> {exe}\n      reason: {self.reason} ({self.matched_rule})")
 
 
@@ -163,7 +169,10 @@ def simulate(program: ProgramManager, actions: list[dict]) -> list[SimulatedDeci
     Each action is a dict: {tool, method?, url?, identity?, vuln_class?, reason?}.
     No HTTP client is created; zero network access occurs.
     """
+    from bbagent.scope.engine import ScopeEngine
+
     engine = ProgramPolicyEngine(program)
+    scope_engine = ScopeEngine(program.config.scope)
     out: list[SimulatedDecision] = []
     for a in actions:
         tool = a.get("tool", "http")
@@ -179,12 +188,17 @@ def simulate(program: ProgramManager, actions: list[dict]) -> list[SimulatedDeci
                           reason=a.get("reason", ""))
         decision = engine.evaluate(req)
         would_execute = decision.allowed and not program.config.dry_run_only
+        scope = "n/a"
+        if tool == "http" and url:
+            sd = scope_engine.check(url)
+            scope = "in_scope" if sd.allowed else ("excluded" if "exclusion" in sd.reason
+                                                   else "out_of_scope")
         out.append(SimulatedDecision(
             tool=tool, action=decision.action,
             target=url, method=method if tool == "http" else None,
             identity=a.get("identity"), vuln_class=a.get("vuln_class"),
             allowed=decision.allowed, would_execute=would_execute,
-            reason=decision.reason, matched_rule=decision.matched_rule,
+            reason=decision.reason, matched_rule=decision.matched_rule, scope=scope,
         ))
     return out
 
