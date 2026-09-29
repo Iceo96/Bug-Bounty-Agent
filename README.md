@@ -641,6 +641,20 @@ venue/account data-scoping — is left empty and listed under `needs_human_revie
 so `policy-check` reports **NOT READY** and `dry_run_only: true` blocks every
 request. It is a policy artifact only; nothing is ever sent to Wolt.
 
+A **local Wolt simulation** (`bbagent_lab/wolt_sim.py`) exercises the full
+autonomous pipeline against Wolt-shaped endpoints entirely through an in-process
+`httpx.MockTransport` — no socket, no DNS, no real Wolt contact. It reuses Wolt's
+real scope, exclusions, forbidden endpoints, required research header (env-ref),
+forbidden-action categories, and the `consumer_test` identity, and fills the
+`NEEDS_HUMAN_REVIEW` gaps with clearly-labelled *simulation-only* values (methods,
+tools, vuln classes, budget, and one simulation second identity) so the pipeline
+can run. In simulation the agent verifies one finding per class (IDOR, BFLA,
+reflected-XSS, SQLi) from Wolt-shaped URLs and routes them to human review, while
+policy denials (excluded host/path, forbidden-POST endpoint, missing/overridden
+`X-HackerOne-Research`, unauthorized/courier/merchant identity, forbidden class or
+action, undefined method/tool) are all refused **before reaching the transport**.
+The real `programs/wolt.yaml` stays NOT READY and `dry_run_only: true` throughout.
+
 `programs/real-program.example.yaml` is a **fail-closed template**: since no
 published rules were supplied, every program-specific permission is marked
 `NEEDS_HUMAN_REVIEW`, `allowed_tools`/`allowed_vulnerability_classes`/`request_budget`

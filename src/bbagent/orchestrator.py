@@ -85,13 +85,19 @@ async def autonomous_run(
     manifests: list[str],
     planner: Planner | None = None,
     budget: TestBudget | None = None,
+    transport=None,
 ) -> AutoRunReport:
-    """Perform one autonomous, policy-governed run and return a structured report."""
+    """Perform one autonomous, policy-governed run and return a structured report.
+
+    ``transport`` is an optional httpx transport for local simulation (e.g. a
+    MockTransport). It is passed straight to the scope-enforcing HTTP client, so
+    the full pipeline runs without any real network. Production leaves it None.
+    """
     surface = SurfaceStore(db)
     review = ReviewStore(db, evidence)
     report = AutoRunReport(program=program.name)
 
-    async with AuthorizedHTTPClient(program.config) as http:
+    async with AuthorizedHTTPClient(program.config, transport=transport) as http:
         policy = ProgramPolicyEngine(program)
         router = ToolRouter(default_tools(), policy, ToolContext(program=program, http=http))
 

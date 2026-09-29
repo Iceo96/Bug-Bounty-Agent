@@ -163,6 +163,12 @@ class ProgramPolicyEngine:
         for hk in getattr(cfg, "required_header_refs", {}):
             if hk.lower() in req_headers:
                 return deny(f"cannot set env-injected required header {hk!r}", "required_headers")
+        # A required header whose env var is unset cannot be satisfied -> fail closed.
+        import os
+        for hk, env_var in getattr(cfg, "required_header_refs", {}).items():
+            if os.getenv(env_var) is None:
+                return deny(f"required header {hk!r} unavailable (env {env_var} unset)",
+                            "required_headers")
         return None
 
     # --- budget accounting ----------------------------------------------------
