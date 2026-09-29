@@ -8,6 +8,7 @@ from bbagent.config.models import (
     RateLimit,
     TestAccount,
     LLMConfig,
+    PolicyBudget,
 )
 from bbagent.config.loader import load_program, ProgramConfigError
 
@@ -19,6 +20,7 @@ __all__ = [
     "RateLimit",
     "TestAccount",
     "LLMConfig",
+    "PolicyBudget",
     "load_program",
     "ProgramConfigError",
 ]

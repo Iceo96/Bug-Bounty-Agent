@@ -99,6 +99,16 @@ class TestAccount(BaseModel):
     notes: Optional[str] = None
 
 
+class PolicyBudget(BaseModel):
+    """Policy-level request budget (in addition to the runner's TestBudget)."""
+
+    model_config = {"extra": "forbid"}
+
+    total: int = Field(default=1000, ge=1)
+    per_target: int = Field(default=500, ge=1)
+    per_tool: int = Field(default=1000, ge=1)
+
+
 class LLMConfig(BaseModel):
     """Optional LLM reasoning layer. Prioritization only — never execution.
 
@@ -152,6 +162,12 @@ class ProgramConfig(BaseModel):
     rate_limit: RateLimit = Field(default_factory=RateLimit)
     test_accounts: list[TestAccount] = Field(default_factory=list)
     llm: LLMConfig = Field(default_factory=LLMConfig)
+    # --- Tool/policy layer (used by the ProgramPolicyEngine; fail-closed) --------
+    allowed_tools: list[str] = Field(default_factory=list)
+    allowed_vulnerability_classes: list[str] = Field(default_factory=list)
+    forbidden_actions: list[str] = Field(default_factory=list)
+    allow_unauthenticated: bool = True
+    request_budget: Optional[PolicyBudget] = None
     notes: list[str] = Field(default_factory=list)
 
     @model_validator(mode="after")

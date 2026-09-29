@@ -47,6 +47,8 @@ detectors/    Detector/Verifier interfaces + registry + IDOR/BOLA + BFLA + refle
 verification/ VerificationEngine (hypothesis→finding lifecycle) + deduplication
 planner/      Deterministic planner, capability registry, budgets, run history, LLM boundary
 llm/          LLM Reasoner adapter (prioritization only): sanitizer, strict schema, validation
+tools/        Tool abstraction: Tool interface, registry, HTTP tool, local recon tool, router
+policy/       ProgramPolicyEngine — evaluates every tool request (ALLOW/DENY, fail-closed)
 validation.py Evidence validation + deterministic report-quality checks
 reviewstore.py Persistent human-review queue (immutable + edited reports, duplicates)
 review.py     Approval state machine (human-only approval)
@@ -542,6 +544,83 @@ separately with timestamps and the reviewer's action.
 reminder that you submit the report to the bug bounty platform manually.
 Automatic submission is intentionally not implemented.
 
+## Controlled tool layer & Program Policy Engine
+
+The agent/LLM never executes anything directly. It emits a **structured
+`ToolRequest`**; the **Tool Router** validates the tool exists, validates the
+arguments against the tool's schema, runs the request through the **Program
+Policy Engine**, and only on ALLOW executes it. Denied or malformed requests
+never reach a tool. Tools return a **sanitized `ToolResult`** (secret header
+values redacted).
+
+```
+Program Configuration
+        ↓
+Program Policy Engine  ── ALLOW / DENY (fail-closed)
+        ↓
+Agent / Planner
+        ↓
+   ToolRequest ──►  Tool Router
+                      ├─ tool exists?           (else DENY: unknown tool)
+                      ├─ arguments match schema? (else DENY: malformed)
+                      ├─ Policy gates:
+                      │    tool allowed · vuln-class allowed · identity authorized
+                      │    scope · exclusions · method · required-header override
+                      │    active-testing · request budget (total/per-target/per-tool)
+                      ├─ record budget · inject identity token (server-side)
+                      └─ Tool.execute  ─►  AuthorizedHTTPClient / local recon
+                                              ↓
+                                        Sanitized ToolResult ──► Agent / Planner
+```
+
+**Tools** (each has a name, description, version, input/output schema,
+permissions, and an `execute` method):
+
+- **`http`** — wraps the existing `AuthorizedHTTPClient` (not reimplemented). It
+  keeps enforcing scope, exclusions, allowed methods, required headers,
+  active-testing, dry-run, rate limits, and request budgets. Required headers are
+  force-applied last (cannot be removed/overridden), an identity's bearer token is
+  resolved from the environment **inside the layer** and never shown to the LLM,
+  and the result redacts `Authorization`/`Cookie`/`Set-Cookie` values.
+- **`recon`** — local, deterministic asset discovery from the *authorized scope*
+  only. It resolves loopback names without real DNS and performs **no**
+  Internet-wide enumeration; every host it returns is still scope-checked.
+
+**Program Policy Engine** — evaluates every request and returns an explicit
+`PolicyDecision` (allowed, reason, matched rule, tool, action, target, identity,
+vuln class; **no secrets**). It **fails closed**: a missing/ambiguous field (e.g.
+no `allowed_tools`, no target) DENIES rather than guessing. Decisions include:
+
+| Situation | Decision |
+|---|---|
+| in-scope GET with an allowed test identity | ALLOW |
+| target out of scope / excluded path | DENY |
+| HTTP method not allowed / active method on a passive program | DENY |
+| attempt to override a required header | DENY |
+| unauthorized identity handle | DENY |
+| tool not in `allowed_tools` | DENY |
+| vulnerability class not in `allowed_vulnerability_classes` | DENY |
+| request budget exhausted (stricter of total/per-target/per-tool) | DENY |
+| unauthenticated action when `allow_unauthenticated: false` | DENY |
+| unknown tool / malformed arguments (router) | DENY |
+
+Policy config lives in the program (`allowed_tools`, `allowed_vulnerability_classes`,
+`forbidden_actions`, `allow_unauthenticated`, `request_budget`, plus the existing
+scope/exclusions/methods/required-headers/test-accounts). Secrets stay in
+environment variables referenced by handle — never in YAML, never in decisions.
+
+### Local Bug Bounty Program Simulator
+
+`bbagent_lab/simulator.py` builds a fully local, synthetic program
+(`local-security-program`): loopback-only scope, an `/excluded/` exclusion, `GET`
+only, a required `X-Research-ID` header, two synthetic identities, request
+budgets, `allowed_tools: [http, recon]`, and the four allowed vulnerability
+classes. The end-to-end test drives it: allowed recon → allowed in-scope HTTP →
+denied out-of-scope/excluded/unknown-tool (never executed) → map the surface →
+run the four detectors → verify with immutable evidence → human review. The agent
+cannot escape scope, use an unauthorized identity, remove required headers, use a
+forbidden tool/method, exceed budgets, **approve**, or **submit**.
+
 ## End-to-end lifecycle
 
 ```
@@ -607,6 +686,14 @@ generic 200 DISPROVEN, payload-not-reflected DISPROVEN, attribute-breakout
 VERIFIED, script-context inconclusive (not VERIFIED), malformed hypothesis (no
 param), out-of-scope blocked, dry-run makes no requests, budget enforced,
 evidence hashes validated, and review-workflow integration.
+
+Plus **tool-layer + policy** tests: tool registration/schema, unknown tool,
+malformed arguments, `ToolRequest` rejecting unknown fields, and every policy
+decision (allow in-scope; deny out-of-scope, excluded path, forbidden method,
+required-header override, unauthorized identity, unauthorized tool, forbidden
+vuln class, exhausted budget, unauthenticated-when-required, and fail-closed with
+no `allowed_tools`); plus router tests proving a denied request never reaches the
+HTTP client and results are sanitized, and an end-to-end simulator run.
 
 Plus **SQL-injection** tests (unit + lab integration): vulnerable endpoint
 VERIFIED via the true/false differential, secure parameterized endpoint DISPROVEN,
