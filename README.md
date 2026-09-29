@@ -47,8 +47,9 @@ detectors/    Detector/Verifier interfaces + registry + IDOR/BOLA + BFLA + refle
 verification/ VerificationEngine (hypothesis→finding lifecycle) + deduplication
 planner/      Deterministic planner, capability registry, budgets, run history, LLM boundary
 llm/          LLM Reasoner adapter (prioritization only): sanitizer, strict schema, validation
-tools/        Tool abstraction: Tool interface, registry, HTTP tool, local recon tool, router
-policy/       ProgramPolicyEngine — evaluates every tool request (ALLOW/DENY, fail-closed)
+tools/        Tool abstraction: Tool interface, registry, HTTP tool, local recon tool, router,
+              and PolicyGatedHTTP (the single policy-gated path for detector verification)
+policy/       ProgramPolicyEngine (ALLOW/DENY, fail-closed) incl. mechanical data-scoping
 validation.py Evidence validation + deterministic report-quality checks
 reviewstore.py Persistent human-review queue (immutable + edited reports, duplicates)
 review.py     Approval state machine (human-only approval)
@@ -605,9 +606,27 @@ no `allowed_tools`, no target) DENIES rather than guessing. Decisions include:
 | unknown tool / malformed arguments (router) | DENY |
 
 Policy config lives in the program (`allowed_tools`, `allowed_vulnerability_classes`,
-`forbidden_actions`, `allow_unauthenticated`, `request_budget`, plus the existing
-scope/exclusions/methods/required-headers/test-accounts). Secrets stay in
-environment variables referenced by handle — never in YAML, never in decisions.
+`forbidden_actions`, `allow_unauthenticated`, `request_budget`, `data_scope`, plus
+the existing scope/exclusions/methods/required-headers/test-accounts). Secrets stay
+in environment variables referenced by handle — never in YAML, never in decisions.
+
+**Mechanical data-scoping** — when a program sets `data_scope.enforce: true`, the
+engine extracts id-like references from every request URL (id-like path segments
+and id-like query values) and denies any that are not in `authorized_object_ids`,
+unless the URL matches an `authorized_url_prefixes` entry. This is enforced in the
+policy layer — not via planner/detector/LLM behavior — so an unauthorized
+object/data reference is refused before transport. (Wolt uses this for its
+authorized consumer/venue test entities and the authorized venue URL.)
+
+**Policy-gated verification (no bypass path)** — detector verifiers do not touch
+the HTTP client directly. Each verification request goes through `PolicyGatedHTTP`,
+which runs the *same* `ProgramPolicyEngine` (vulnerability-class, identity, scope,
+method, required-headers, forbidden-action, budget, data-scope) before executing,
+records the budget, injects the identity credential server-side, and returns the
+raw exchange for evidence. A denied verification request raises and never reaches
+the transport. When a differential detector (IDOR/BFLA) needs a second authorized
+identity the program does not provide, the hypothesis is marked
+**INCONCLUSIVE / NEEDS_HUMAN_REVIEW** rather than using an unauthorized identity.
 
 ### Real-program policy adapter (dry-run / validation only)
 
@@ -777,6 +796,16 @@ generic 200 DISPROVEN, payload-not-reflected DISPROVEN, attribute-breakout
 VERIFIED, script-context inconclusive (not VERIFIED), malformed hypothesis (no
 param), out-of-scope blocked, dry-run makes no requests, budget enforced,
 evidence hashes validated, and review-workflow integration.
+
+Plus **data-scoping** tests (Priority 1): authorized entity proceeds; arbitrary
+user_id/venue_id and an unauthorized venue URL are denied before transport (zero
+transport calls); the authorized venue URL is exempt; the LLM cannot smuggle a
+different identifier. Plus **verification-gate** tests (Priorities 2–3): every
+verification request is refused before transport when it violates vuln-class,
+identity, scope, method, required-header, forbidden-action, or budget; and
+IDOR/BFLA go INCONCLUSIVE (never an unauthorized identity) when a second
+authorized identity is unavailable, with the real Wolt policy unable to select
+the simulation-only `sim_other`.
 
 Plus the **autonomous run** test: a single orchestrated run against the simulator
 discovers the full surface and verifies one finding per class across all four

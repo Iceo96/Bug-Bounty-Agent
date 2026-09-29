@@ -10,6 +10,7 @@ from __future__ import annotations
 import os
 
 from bbagent.config.models import (
+    PolicyBudget,
     ProgramConfig,
     RateLimit,
     ScopeConfig,
@@ -59,5 +60,10 @@ def build_lab_program() -> ProgramConfig:
             TestAccount(label="user_a", role="admin", username="alice", secret_env=ENV_TOKEN_A),
             TestAccount(label="user_b", role="user", username="bob", secret_env=ENV_TOKEN_B),
         ],
+        # Policy-complete so the policy-gated verification path is permitted.
+        allowed_tools=["http", "recon"],
+        allowed_vulnerability_classes=["idor", "privilege_escalation", "reflected_xss", "sql_injection"],
+        allow_unauthenticated=True,
+        request_budget=PolicyBudget(total=1000, per_target=1000, per_tool=1000),
         notes=["Local lab — loopback only. Synthetic data."],
     )

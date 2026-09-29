@@ -99,6 +99,22 @@ class TestAccount(BaseModel):
     notes: Optional[str] = None
 
 
+class DataScope(BaseModel):
+    """Mechanical data-scoping: which object/data identifiers may be referenced.
+
+    When ``enforce`` is true, any id-like reference in a request URL (an id-like
+    path segment, or an id-like value of a query parameter) must be listed in
+    ``authorized_object_ids``, unless the URL matches an ``authorized_url_prefixes``
+    entry. Everything else is denied — independent of planner/detector/LLM behavior.
+    """
+
+    model_config = {"extra": "forbid"}
+
+    enforce: bool = False
+    authorized_object_ids: list[str] = Field(default_factory=list)
+    authorized_url_prefixes: list[str] = Field(default_factory=list)
+
+
 class PolicyBudget(BaseModel):
     """Policy-level request budget (in addition to the runner's TestBudget)."""
 
@@ -176,6 +192,7 @@ class ProgramConfig(BaseModel):
     forbidden_actions: list[str] = Field(default_factory=list)
     allow_unauthenticated: bool = True
     request_budget: Optional[PolicyBudget] = None
+    data_scope: Optional[DataScope] = None
     # Permanent dry-run: when true, the HTTP client blocks ALL outbound requests
     # regardless of the environment kill switch. Used by real-program adapters.
     dry_run_only: bool = False

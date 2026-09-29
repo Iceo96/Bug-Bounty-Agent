@@ -79,6 +79,16 @@ allowed_vulnerability_classes: []
 # No numeric rate limits or request budgets are stated -> null (fail-closed).
 request_budget: null
 
+# Mechanical data scoping: only the explicitly authorized test entities may be
+# referenced. Any other object/data identifier is denied before transport.
+data_scope:
+  enforce: true
+  authorized_object_ids:
+    - "670fa3e9ead6e49d65cc3614"     # authorized consumer test user_id
+    - "670e7897e3c56dcc5b5a0989"     # authorized venue test venue_id
+  authorized_url_prefixes:
+    - "https://wolt.com/en/fin/helsinki/venue/test-670e7897e3c56dcc5b5a0989-sh0p"
+
 # Program-declared out-of-scope categories (do-not-test + non-eligible findings).
 # Preserved verbatim as slugs; never converted into permissions.
 forbidden_actions:

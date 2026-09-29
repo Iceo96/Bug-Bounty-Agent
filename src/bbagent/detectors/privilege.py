@@ -60,15 +60,6 @@ def resolve_admin_regular(program: ProgramManager) -> tuple[str | None, str | No
     return admin, regular
 
 
-def _identity_headers(program: ProgramManager, label: str | None) -> dict[str, str]:
-    if label is None:
-        return {}
-    token = program.resolve_account_secret(label)
-    if token:
-        return {"Authorization": f"Bearer {token}"}
-    return {"X-Test-Identity": label}
-
-
 def _privileged_markers(body: str) -> set[str]:
     """Extract privileged marker values (scalars under sensitive keys)."""
     try:
@@ -138,13 +129,15 @@ class PrivilegeEscalationVerifier(Verifier):
         if admin_label is None or regular_label is None:
             return VerificationResult(
                 verified=False,
-                reason="need one admin-role and one non-admin test identity to verify",
+                reason=("INCONCLUSIVE / NEEDS_HUMAN_REVIEW: privilege escalation requires one "
+                        "authorized admin identity and one authorized non-admin identity"),
             )
 
         # (1) Privileged baseline, (2) unauthenticated control, (3) non-privileged test.
-        admin = await ctx.http.get(url, headers=_identity_headers(ctx.program, admin_label))
-        anon = await ctx.http.get(url, headers={})
-        other = await ctx.http.get(url, headers=_identity_headers(ctx.program, regular_label))
+        # Identities are passed as handles to the policy-gated client.
+        admin = await ctx.http.get(url, identity=admin_label)
+        anon = await ctx.http.get(url)
+        other = await ctx.http.get(url, identity=regular_label)
         exchanges = [admin, anon, other]
 
         markers = _privileged_markers(admin.response_body) if admin.status_code == 200 else set()

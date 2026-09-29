@@ -9,11 +9,12 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from typing import TYPE_CHECKING
-from urllib.parse import urlsplit
+from urllib.parse import parse_qsl, urlsplit
 
 from bbagent.logging_config import get_logger
 from bbagent.program.manager import ProgramManager
 from bbagent.scope.engine import ScopeEngine
+from bbagent.urlutils import looks_like_id
 
 if TYPE_CHECKING:  # avoid a runtime import cycle (tools -> router -> policy)
     from bbagent.tools.base import ToolRequest
@@ -21,6 +22,19 @@ if TYPE_CHECKING:  # avoid a runtime import cycle (tools -> router -> policy)
 log = get_logger(__name__)
 
 _ACTIVE_METHODS = {"POST", "PUT", "PATCH", "DELETE"}
+
+
+def _object_refs_in_url(url: str) -> list[str]:
+    """Id-like references in a URL: id-like path segments + id-like query values."""
+    parts = urlsplit(url)
+    refs: list[str] = []
+    for seg in (parts.path or "").split("/"):
+        if seg and looks_like_id(seg):
+            refs.append(seg)
+    for _k, v in parse_qsl(parts.query, keep_blank_values=True):
+        if v and looks_like_id(v):
+            refs.append(v)
+    return refs
 
 
 @dataclass(frozen=True)
@@ -169,6 +183,18 @@ class ProgramPolicyEngine:
             if os.getenv(env_var) is None:
                 return deny(f"required header {hk!r} unavailable (env {env_var} unset)",
                             "required_headers")
+
+        # Data scoping: object/data references must be authorized test entities.
+        ds = getattr(cfg, "data_scope", None)
+        if ds is not None and ds.enforce:
+            lower = url.lower()
+            if not any(lower.startswith(p.lower()) for p in ds.authorized_url_prefixes):
+                allowed_ids = set(ds.authorized_object_ids)
+                for ref in _object_refs_in_url(url):
+                    if ref not in allowed_ids:
+                        return deny(
+                            f"unauthorized data reference {ref!r} (outside authorized test entities)",
+                            "data_scope")
         return None
 
     # --- budget accounting ----------------------------------------------------

@@ -170,8 +170,14 @@ def wolt_mock_transport() -> WoltMockTransport:
     return WoltMockTransport()
 
 
-def build_wolt_sim_program() -> ProgramManager:
-    """Wolt policy semantics + SIMULATION-ONLY gap-fills so the pipeline can run."""
+def build_wolt_sim_program(*, enforce_data_scope: bool = False) -> ProgramManager:
+    """Wolt policy semantics + SIMULATION-ONLY gap-fills so the pipeline can run.
+
+    ``enforce_data_scope=True`` turns on Wolt's mechanical data-scoping (authorized
+    consumer/venue ids + venue URL) for policy-scenario tests. The default (False)
+    lets the full detector pipeline run with detector probe ids; data-scoping is
+    proven independently.
+    """
     data = load_program(_WOLT_YAML).model_dump()
     data.update({
         "name": "wolt-SIMULATION (local mock; NOT a live target)",
@@ -182,6 +188,11 @@ def build_wolt_sim_program() -> ProgramManager:
         "allow_unauthenticated": True,               # SIMULATION gap-fill (XSS/SQLi + discovery)
         "request_budget": {"total": 500, "per_target": 500, "per_tool": 500},
         "needs_human_review": [],
+        "data_scope": ({"enforce": True,
+                        "authorized_object_ids": [CONSUMER_USER_ID, VENUE_ID],
+                        "authorized_url_prefixes": [
+                            f"https://wolt.com/en/fin/helsinki/venue/test-{VENUE_ID}-sh0p"]}
+                       if enforce_data_scope else {"enforce": False}),
         "test_accounts": [
             {"label": "consumer_test", "role": "consumer",
              "username": f"user_id:{CONSUMER_USER_ID}", "secret_env": ENV_CONSUMER,

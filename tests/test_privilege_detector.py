@@ -11,8 +11,11 @@ import httpx
 import pytest
 
 from bbagent.config.models import (
-    ProgramConfig, RateLimit, ScopeConfig, ScopeKind, ScopeRule, TestAccount, TestingRestrictions,
+    PolicyBudget, ProgramConfig, RateLimit, ScopeConfig, ScopeKind, ScopeRule, TestAccount,
+    TestingRestrictions,
 )
+from bbagent.policy.engine import ProgramPolicyEngine
+from bbagent.tools.gateway import PolicyGatedHTTP
 from bbagent.detectors.privilege import PrivilegeEscalationVerifier
 from bbagent.detectors.base import VerificationContext
 from bbagent.http.client import AuthorizedHTTPClient
@@ -39,6 +42,10 @@ def _program(roles=("admin", "user")):
                                          allow_active_testing=False),
         rate_limit=RateLimit(requests_per_second=100, max_concurrent=8),
         test_accounts=accts,
+        allowed_tools=["http"],
+        allowed_vulnerability_classes=["privilege_escalation"],
+        allow_unauthenticated=True,
+        request_budget=PolicyBudget(),
     ))
 
 
@@ -66,8 +73,10 @@ async def _verify(kind: str, *, program=None, url=URL):
     db = Database(":memory:")
     try:
         async with AuthorizedHTTPClient(program.config, transport=_transport(kind)) as http:
+            gateway = PolicyGatedHTTP(program, ProgramPolicyEngine(program), http)
+            gateway.vuln_class = "privilege_escalation"
             ctx = VerificationContext(
-                program=program, db=db, http=http,
+                program=program, db=db, http=gateway,
                 hypothesis=Hypothesis(program=program.name, vuln_type="privilege_escalation",
                                       title="t", rationale="r", target_url=url),
             )

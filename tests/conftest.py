@@ -6,11 +6,13 @@ import httpx
 import pytest
 
 from bbagent.config.models import (
+    PolicyBudget,
     ProgramConfig,
     RateLimit,
     ScopeConfig,
     ScopeKind,
     ScopeRule,
+    TestAccount,
     TestingRestrictions,
 )
 from bbagent.program.manager import ProgramManager
@@ -40,6 +42,12 @@ def program_config() -> ProgramConfig:
         ),
         required_headers={"X-Bug-Bounty": "researcher"},
         rate_limit=RateLimit(requests_per_second=50, max_concurrent=4),
+        # Policy-complete so the policy-gated verification path is permitted.
+        test_accounts=[TestAccount(label="user_a"), TestAccount(label="user_b")],
+        allowed_tools=["http", "recon"],
+        allowed_vulnerability_classes=["idor", "privilege_escalation", "reflected_xss", "sql_injection"],
+        allow_unauthenticated=True,
+        request_budget=PolicyBudget(total=1000, per_target=1000, per_tool=1000),
     )
 
 

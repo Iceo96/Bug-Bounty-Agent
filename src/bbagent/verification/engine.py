@@ -49,11 +49,21 @@ class VerificationEngine:
         db: Database,
         http: AuthorizedHTTPClient,
         evidence: EvidenceStore,
+        *,
+        policy=None,
     ):
+        from bbagent.policy.engine import ProgramPolicyEngine
+        from bbagent.tools.gateway import PolicyGatedHTTP
+
         self._program = program
         self._db = db
         self._http = http
         self._evidence = evidence
+        # Every verification request is policy-gated through this single path.
+        self._policy = policy or (ProgramPolicyEngine(program) if http is not None else None)
+        self._gateway = (
+            PolicyGatedHTTP(program, self._policy, http) if http is not None else None
+        )
 
     async def process(self, hypothesis: Hypothesis) -> Finding | None:
         """Run a hypothesis through verification. Returns a Finding or None."""
@@ -67,8 +77,12 @@ class VerificationEngine:
 
         verifier: Verifier = verifier_cls()
         self._db.set_hypothesis_status(hypothesis.id, HypothesisStatus.VERIFYING)
+        # Gate every verification request for this hypothesis's vulnerability class.
+        if self._gateway is not None:
+            self._gateway.vuln_class = hypothesis.vuln_type
         ctx = VerificationContext(
-            program=self._program, db=self._db, http=self._http, hypothesis=hypothesis
+            program=self._program, db=self._db, http=self._gateway or self._http,
+            hypothesis=hypothesis,
         )
         result = await verifier.verify(ctx)
 

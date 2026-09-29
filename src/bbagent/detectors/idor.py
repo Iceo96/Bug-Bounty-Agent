@@ -21,7 +21,6 @@ from bbagent.detectors.base import (
     Verifier,
     registry,
 )
-from bbagent.program.manager import ProgramManager
 from bbagent.storage.models import Hypothesis
 from bbagent.verification.dedup import compute_dedup_key
 
@@ -62,31 +61,6 @@ class IDORDetector(Detector):
         return hyps
 
 
-def _identity_headers(program: ProgramManager, label: str) -> dict[str, str]:
-    """Build auth headers for a test identity.
-
-    Prefer a real bearer token resolved from the account's ``secret_env``; if no
-    secret is configured, fall back to an ``X-Test-Identity`` marker header (used
-    by lightweight mock targets in unit tests).
-    """
-    token = program.resolve_account_secret(label)
-    if token:
-        return {"Authorization": f"Bearer {token}"}
-    return {"X-Test-Identity": label}
-
-
-def _resolve_identities(program: ProgramManager) -> tuple[str, str]:
-    """Return (owner_label, other_label). Owner is the first configured account.
-
-    Falls back to synthetic ``user_a``/``user_b`` when the program declares fewer
-    than two test accounts, so the detector works against simple mock targets.
-    """
-    accounts = program.config.test_accounts
-    if len(accounts) >= 2:
-        return accounts[0].label, accounts[1].label
-    return "user_a", "user_b"
-
-
 def _same_object(body_a: str, body_b: str) -> bool:
     """True if two response bodies represent the same object contents.
 
@@ -122,12 +96,23 @@ class IDORVerifier(Verifier):
 
     async def verify(self, ctx: VerificationContext) -> VerificationResult:
         url = ctx.hypothesis.target_url
-        owner_label, other_label = _resolve_identities(ctx.program)
 
-        # (2) Baseline as the legitimate owner (identity A, object A).
-        owner = await ctx.http.get(url, headers=_identity_headers(ctx.program, owner_label))
-        # (3) Same object as the second authorized identity (identity B).
-        other = await ctx.http.get(url, headers=_identity_headers(ctx.program, other_label))
+        # Requires TWO explicitly authorized identities. If the program authorizes
+        # fewer, mark INCONCLUSIVE rather than using an unauthorized identity.
+        accounts = ctx.program.config.test_accounts
+        if len(accounts) < 2:
+            return VerificationResult(
+                verified=False,
+                reason=("INCONCLUSIVE / NEEDS_HUMAN_REVIEW: IDOR requires two authorized "
+                        f"test identities; only {len(accounts)} configured"),
+            )
+        owner_label, other_label = accounts[0].label, accounts[1].label
+
+        # (2) Baseline as the legitimate owner; (3) same object as identity B.
+        # Identities are passed as handles; the policy-gated client injects the
+        # credential server-side after the policy check.
+        owner = await ctx.http.get(url, identity=owner_label)
+        other = await ctx.http.get(url, identity=other_label)
 
         # The owner must actually see a real object, or there is no baseline to
         # compare against and we cannot claim anything.
