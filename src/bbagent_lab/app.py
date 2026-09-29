@@ -19,10 +19,64 @@ from __future__ import annotations
 import html
 import json
 import re
+import sqlite3
 from typing import Callable, Iterable
 from urllib.parse import parse_qs
 
 from bbagent_lab import data
+
+# Deterministic synthetic product data for the SQL-injection scenario.
+# (id, name, category, price) — no real/personal/secret data.
+_PRODUCTS = [
+    (1, "Widget", "tools", 10),
+    (2, "Gadget", "tools", 20),
+    (3, "Gizmo", "toys", 30),
+    (4, "Doohickey", "toys", 40),
+    (5, "Thingamajig", "misc", 50),
+]
+
+
+def _run_products(id_value: str, *, safe: bool) -> tuple[str, dict]:
+    """Query the synthetic products table. A fresh in-memory DB per request keeps
+    it deterministic and thread-safe. Read-only SELECT only."""
+    conn = sqlite3.connect(":memory:")
+    try:
+        conn.execute("CREATE TABLE products(id INTEGER, name TEXT, category TEXT, price INTEGER)")
+        conn.executemany("INSERT INTO products VALUES(?,?,?,?)", _PRODUCTS)
+        # Output column is aliased 'sku' (not 'id') purely so the generic recon
+        # object-reference heuristic doesn't mistake this public product listing
+        # for an object-scoped resource. The injectable column is still 'id'.
+        if safe:
+            # Parameterized / prepared statement — input is bound, never code.
+            rows = conn.execute(
+                "SELECT id AS sku, name, category, price FROM products WHERE id = ?", (id_value,)
+            ).fetchall()
+        else:
+            # DELIBERATELY VULNERABLE: input is interpolated into the SQL string.
+            rows = conn.execute(
+                f"SELECT id AS sku, name, category, price FROM products WHERE id = {id_value}"  # noqa: S608
+            ).fetchall()
+    except sqlite3.Error:
+        return "500 Internal Server Error", {"error": "query failed"}
+    finally:
+        conn.close()
+    products = [dict(zip(("sku", "name", "category", "price"), r)) for r in rows]
+    return "200 OK", {"products": products, "count": len(products)}
+
+
+def _sqli_manifest() -> dict:
+    """Separate manifest for the SQL-injection scenario (keeps others untouched)."""
+    return {
+        "application": "bbagent-lab-sqli",
+        "endpoints": [
+            {"url": "/products", "method": "GET", "object_scoped": False,
+             "example_object_url": "/products?id=1", "input_param": "id"},
+            {"url": "/products-safe", "method": "GET", "object_scoped": False,
+             "example_object_url": "/products-safe?id=1", "input_param": "id"},
+            {"url": "/whoami", "method": "GET", "object_scoped": False,
+             "example_object_url": "/whoami?id=1", "input_param": "id"},
+        ],
+    }
 
 _JSON = [("Content-Type", "application/json")]
 
@@ -207,6 +261,25 @@ def create_app() -> Callable:
             page = f"<!doctype html><html><head><title>Search</title></head>" \
                    f"<body><h1>Search</h1><p>Results for: {q}</p></body></html>"
             return _html(start_response, "200 OK", page)
+
+        # --- SQL-injection scenario (separate manifest + endpoints). -------------
+        if path == "/sqli-scope/manifest":
+            return _resp(start_response, "200 OK", _sqli_manifest())
+
+        # VULNERABLE: interpolates `id` into the SQL string (boolean-injectable).
+        if path == "/products":
+            status, payload = _run_products(_query_param(environ, "id"), safe=False)
+            return _resp(start_response, status, payload)
+
+        # SECURE: parameterized query — boolean payloads do not change semantics.
+        if path == "/products-safe":
+            status, payload = _run_products(_query_param(environ, "id"), safe=True)
+            return _resp(start_response, status, payload)
+
+        # CONTROL: input never reaches SQL; always one echoed record.
+        if path == "/whoami":
+            return _resp(start_response, "200 OK",
+                         {"records": [{"echo": _query_param(environ, "id")}]})
 
         # CONTROL: reflects `q` verbatim but in a NON-HTML (text/plain) context —
         # the string appears but cannot execute; must NOT be flagged.

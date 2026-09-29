@@ -20,6 +20,7 @@ from typing import Callable
 # verification registry so the engine can find them during execution.
 import bbagent.detectors.idor  # noqa: F401
 import bbagent.detectors.privilege  # noqa: F401
+import bbagent.detectors.sqli  # noqa: F401
 import bbagent.detectors.xss  # noqa: F401
 from bbagent.http.client import AuthorizedHTTPClient
 from bbagent.logging_config import get_logger

@@ -43,7 +43,7 @@ http/         AuthorizedHTTPClient (+ token-bucket rate limiter) — only way to
 storage/      SQLite schema, domain models, immutable EvidenceStore
 recon/        Manifest discovery + attack-surface mapper (crawl, JS, extract)
 surface/      Persistent, queryable attack-surface graph (SQLite)
-detectors/    Detector/Verifier interfaces + registry + IDOR/BOLA + BFLA + reflected-XSS
+detectors/    Detector/Verifier interfaces + registry + IDOR/BOLA + BFLA + reflected-XSS + SQLi
 verification/ VerificationEngine (hypothesis→finding lifecycle) + deduplication
 planner/      Deterministic planner, capability registry, budgets, run history, LLM boundary
 llm/          LLM Reasoner adapter (prioritization only): sanitizer, strict schema, validation
@@ -174,6 +174,20 @@ Reflected-XSS scenario (separate manifest at `/xss-scope/manifest`):
 All payloads are harmless, deterministic, loopback-only (no scripts, no callbacks,
 no cookies/credentials).
 
+SQL-injection scenario (separate manifest at `/sqli-scope/manifest`), backed by a
+per-request in-memory SQLite `products` table `(id, name, category, price)` with 5
+deterministic synthetic rows:
+
+- `GET /products?id=` — **vulnerable**: interpolates `id` into the SQL string
+  (boolean-injectable).
+- `GET /products-safe?id=` — **secure**: parameterized/prepared statement — the
+  same boolean input is bound as a value and cannot change query semantics.
+- `GET /whoami?id=` — **control**: input never reaches SQL (constant echoed
+  record), so there is no differential to exploit.
+
+Probes are read-only (`OR 1=1` / `AND 1=2`) — no DROP/DELETE/UPDATE/INSERT, no
+stacked queries, no filesystem/command/network access.
+
 ### Start / stop the lab (Windows)
 
 ```powershell
@@ -262,7 +276,30 @@ through the AuthorizedHTTPClient and analyzes the response with `html.parser`:
 JavaScript execution. Script-context-only reflection is reported inconclusive
 rather than verified, and would require an actual browser engine to confirm.
 
-All three detectors run through the **same** planner → verification engine →
+**4. SQL injection (`sql_injection`)** — proposed only for plausibly SQL-reaching
+parameters (id-like: `id`, `*_id`, `category`, `page`, …). Verification uses a
+deterministic **boolean/differential** strategy on a content-based *result count*
+(the largest JSON array length in the response) — never status code, body length,
+timing, or error messages:
+
+```
+baseline    id = 1          -> B rows
+true  cond. id = 1 OR 1=1   -> T rows   (must EXPAND if injectable)
+false cond. id = 1 AND 1=2  -> F rows   (must SHRINK if injectable)
+```
+
+VERIFIED only when the strict relationship `T > B` and `F < B` and `T > F` holds —
+which can only happen if the boolean was executed as SQL. A parameterized endpoint
+binds the input (T and F never expand/shrink), a control endpoint returns a
+constant count, and SQL errors / generic 500s / length or timing differences never
+satisfy the differential. The three exchanges (baseline, true, false) are captured
+as immutable evidence. Read-only probes only.
+
+**Limitation (by design):** this is deterministic boolean-based verification for
+the local lab. It does not claim to detect every SQLi variant (blind time-based,
+second-order, out-of-band) and needs a countable (JSON) result set.
+
+All four detectors run through the **same** planner → verification engine →
 evidence store → review workflow; none makes raw HTTP requests or bypasses
 scope, rate limits, budgets, or the human-approval gate.
 
@@ -570,6 +607,14 @@ generic 200 DISPROVEN, payload-not-reflected DISPROVEN, attribute-breakout
 VERIFIED, script-context inconclusive (not VERIFIED), malformed hypothesis (no
 param), out-of-scope blocked, dry-run makes no requests, budget enforced,
 evidence hashes validated, and review-workflow integration.
+
+Plus **SQL-injection** tests (unit + lab integration): vulnerable endpoint
+VERIFIED via the true/false differential, secure parameterized endpoint DISPROVEN,
+control endpoint DISPROVEN, generic 500 DISPROVEN, differing-length-without-SQL
+DISPROVEN, reflected-but-not-interpreted DISPROVEN, malformed hypothesis, the
+`result_count` metric, capability gating to id-like params, out-of-scope blocked,
+budget enforced, dry-run makes no requests, evidence hashes validated, and
+review-workflow integration.
 
 Plus **review workflow** tests: verified finding enters the queue, invalid/
 corrupt evidence blocks report generation, missing fields prevent approval, human

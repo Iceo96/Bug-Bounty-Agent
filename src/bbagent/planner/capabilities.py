@@ -247,6 +247,59 @@ class ReflectedXSSCapability(Capability):
         )
 
 
+class SQLInjectionCapability(Capability):
+    """SQL injection: proposes a test only for plausibly SQL-reaching parameters."""
+
+    vuln_class = "sql_injection"
+    title = "SQL injection (boolean-based)"
+    description = (
+        "Detects SQL injection via a deterministic true/false differential on the "
+        "result-set size (id-like parameters). Read-only probes; no destructive SQL."
+    )
+    active = False  # GET, read-only boolean probes
+
+    def propose(self, view: EndpointView, program: ProgramManager) -> PlanCandidate | None:
+        from urllib.parse import urlsplit, urlunsplit
+
+        from bbagent.detectors.sqli import is_sql_param
+
+        query_params = [p.name for p in view.parameters if p.location == "query"]
+        query_params = query_params or list(view.endpoint.query_params)
+        sql_params = [p for p in query_params if is_sql_param(p)]
+        if not sql_params:
+            return None  # no plausibly SQL-reaching parameter
+        param = sorted(sql_params)[0]
+
+        p = urlsplit(view.endpoint.url)
+        base = urlunsplit((p.scheme, p.netloc, p.path, "", ""))
+        target_url = f"{base}?{param}="
+
+        score = 45
+        reasons = [f"SQL-reaching parameter '{param}'"]
+        if view.endpoint.method.upper() == "GET":
+            score += 10
+            reasons.append("GET endpoint")
+        if view.is_api:
+            score += 5
+            reasons.append("API endpoint")
+        if len(sql_params) > 1:
+            score += 5
+            reasons.append(f"{len(sql_params)} SQL-reaching parameters")
+
+        return PlanCandidate(
+            vulnerability_class=self.vuln_class,
+            target_url=target_url,
+            method="GET",
+            reasoning="; ".join(reasons),
+            score=score,
+            required_auth_context=[],
+            required_inputs={"param": param, "url": base},
+            expected_signal="boolean conditions in input must not change the result set",
+            object_ref_values=[param],
+            active=self.active,
+        )
+
+
 class CapabilityRegistry:
     def __init__(self) -> None:
         self._caps: list[Capability] = []
@@ -271,4 +324,5 @@ def default_capabilities() -> CapabilityRegistry:
     reg.register(AccessControlCapability())
     reg.register(PrivilegeEscalationCapability())
     reg.register(ReflectedXSSCapability())
+    reg.register(SQLInjectionCapability())
     return reg
