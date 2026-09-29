@@ -103,6 +103,21 @@ def _query_param(environ, name: str) -> str:
     return parse_qs(environ.get("QUERY_STRING", "")).get(name, [""])[0]
 
 
+def _full_manifest() -> dict:
+    """One combined manifest spanning every scenario, for an autonomous run.
+
+    Aggregates the per-scenario manifests so a single discovery pass reaches the
+    object-level (IDOR), function-level (BFLA), reflected-XSS, and SQLi endpoints.
+    """
+    endpoints = (
+        _manifest()["endpoints"]        # notes (IDOR) + profile (protected)
+        + _admin_manifest()["endpoints"]  # admin report/settings/ping (BFLA)
+        + _xss_manifest()["endpoints"]    # search/search-safe/echo (XSS)
+        + _sqli_manifest()["endpoints"]   # products/products-safe/whoami (SQLi)
+    )
+    return {"application": "bbagent-lab-full", "endpoints": endpoints}
+
+
 def _admin_manifest() -> dict:
     """A SEPARATE discovery manifest for the function-level authorization scenario.
 
@@ -223,6 +238,10 @@ def create_app() -> Callable:
 
         if path == "/":
             return _resp(start_response, "200 OK", _manifest())
+
+        # Combined manifest spanning all scenarios (for an autonomous run).
+        if path == "/full-scope/manifest":
+            return _resp(start_response, "200 OK", _full_manifest())
 
         # --- Static HTML site + JS (unauthenticated, for crawl/JS discovery). ----
         if path == "/site":

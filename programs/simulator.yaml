@@ -1,0 +1,57 @@
+# Local Bug Bounty Program Simulator — loopback only. No secrets here; test-account
+# tokens are resolved from environment variables at runtime.
+name: "local-security-program"
+platform: "local-simulator"
+authorized: true
+
+scope:
+  in_scope:
+    - kind: domain
+      value: "127.0.0.1"
+    - kind: domain
+      value: "localhost"
+  excluded: []
+
+restrictions:
+  allow_active_testing: false
+  allowed_methods: ["GET", "HEAD", "OPTIONS"]
+  forbidden_paths:
+    - "/excluded/"          # program exclusions
+  no_dos: true
+  notes:
+    - "Local simulator only. Synthetic data. Never point at an external target."
+
+required_headers:
+  X-Research-ID: "local-agent"
+
+rate_limit:
+  requests_per_second: 50
+  max_concurrent: 8
+
+test_accounts:
+  - label: "user_a"
+    role: "admin"
+    username: "alice"
+    secret_env: "BBAGENT_LAB_TOKEN_A"
+  - label: "user_b"
+    role: "user"
+    username: "bob"
+    secret_env: "BBAGENT_LAB_TOKEN_B"
+
+allowed_tools:
+  - http
+  - recon
+
+allowed_vulnerability_classes:
+  - idor
+  - privilege_escalation
+  - reflected_xss
+  - sql_injection
+
+forbidden_actions: []
+allow_unauthenticated: true
+
+request_budget:
+  total: 500
+  per_target: 200
+  per_tool: 500

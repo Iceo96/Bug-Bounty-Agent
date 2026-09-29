@@ -621,6 +621,42 @@ run the four detectors → verify with immutable evidence → human review. The 
 cannot escape scope, use an unauthorized identity, remove required headers, use a
 forbidden tool/method, exceed budgets, **approve**, or **submit**.
 
+### Autonomous run
+
+`bbagent.orchestrator.autonomous_run(...)` performs one bounded, policy-governed
+run end to end: read the program → policy-gated local recon → policy-gated surface
+discovery (each manifest ALLOW-checked before mapping) → plan + prioritize → run
+the **four existing detectors** through the verification engine → immutable
+evidence → generate reports → enqueue every verified finding for **human** review.
+It adds no detectors and no tools, and never approves or submits.
+
+```powershell
+$env:BBAGENT_LAB_TOKEN_A = "tok_test_a_11111111"
+$env:BBAGENT_LAB_TOKEN_B = "tok_test_b_22222222"
+.venv\Scripts\python.exe -m bbagent_lab.server --port 8020    # in one terminal
+.venv\Scripts\python.exe -m bbagent.cli --db data\auto.db `
+    autorun programs\simulator.yaml --base http://127.0.0.1:8020
+```
+
+Against the lab's combined `/full-scope/manifest`, a single run discovers ~11
+endpoints, generates ~14 hypotheses, and verifies **exactly one finding per
+class** while disproving the secure/control endpoints:
+
+```
+# Autonomous run: local-security-program
+recon hosts: 127.0.0.1, localhost
+manifests allowed: 1  denied: 0
+endpoints discovered: 11
+hypotheses: 14
+verified findings: 4 [idor, privilege_escalation, reflected_xss, sql_injection]
+  - idor: .../api/notes/note-a1 -> ready_for_review (find_...)
+  - privilege_escalation: .../api/admin/report -> ready_for_review (find_...)
+  - reflected_xss: .../search?q=... -> ready_for_review (find_...)
+  - sql_injection: .../products?id=1 -> ready_for_review (find_...)
+run: executed=14 verified=4 disproven=10 requests=32
+All verified findings await HUMAN review. The agent did not approve or submit.
+```
+
 ## End-to-end lifecycle
 
 ```
@@ -686,6 +722,11 @@ generic 200 DISPROVEN, payload-not-reflected DISPROVEN, attribute-breakout
 VERIFIED, script-context inconclusive (not VERIFIED), malformed hypothesis (no
 param), out-of-scope blocked, dry-run makes no requests, budget enforced,
 evidence hashes validated, and review-workflow integration.
+
+Plus the **autonomous run** test: a single orchestrated run against the simulator
+discovers the full surface and verifies one finding per class across all four
+detectors (with valid evidence, all queued for human review), and denies an
+out-of-scope discovery manifest.
 
 Plus **tool-layer + policy** tests: tool registration/schema, unknown tool,
 malformed arguments, `ToolRequest` rejecting unknown fields, and every policy

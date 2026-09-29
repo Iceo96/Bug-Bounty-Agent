@@ -27,6 +27,7 @@ from bbagent.config.loader import ProgramConfigError, load_program
 from bbagent.http.client import AuthorizedHTTPClient, RequestBlocked
 from bbagent.logging_config import configure_logging
 from bbagent.llm.reasoner import ReasonerUnavailable, build_reasoner
+from bbagent.orchestrator import autonomous_run
 from bbagent.planner import LLMPlanner, PlanRunner, PlannedHypothesis, TestBudget
 from bbagent.program.manager import ProgramManager
 from bbagent.recon import AttackSurfaceMapper
@@ -287,6 +288,13 @@ def main(argv: list[str] | None = None) -> int:
     p_run.add_argument("--max-per-endpoint", type=int, default=2)
     p_run.add_argument("--max-runtime", type=float, default=120.0)
 
+    p_auto = sub.add_parser("autorun", help="Autonomous policy-governed run against a local target")
+    p_auto.add_argument("config", help="Program config path")
+    p_auto.add_argument("--base", required=True, help="Loopback base URL of the local target")
+    p_auto.add_argument("--manifest-path", default="/full-scope/manifest",
+                        help="Discovery manifest path under --base")
+    p_auto.add_argument("--llm", action="store_true", help="Use the LLM reasoner for prioritization")
+
     p_findings = sub.add_parser("findings", help="List findings and their review status")
     p_findings.add_argument("--program", default=None)
     p_findings.add_argument("--status", default=None)
@@ -341,6 +349,31 @@ def main(argv: list[str] | None = None) -> int:
         except RequestBlocked as exc:
             print(f"blocked: {exc}", file=sys.stderr)
             return 1
+
+    # Autonomous run.
+    if args.cmd == "autorun":
+        try:
+            program = ProgramManager.from_file(args.config)
+        except ProgramConfigError as exc:
+            print(f"error: {exc}", file=sys.stderr)
+            return 2
+        planner = _build_planner(program, getattr(args, "llm", False))
+        manifest = args.base.rstrip("/") + args.manifest_path
+        db = Database(db_path)
+        evidence = EvidenceStore(db, _evidence_dir())
+
+        async def _do_autorun() -> int:
+            report = await autonomous_run(program, db, evidence, manifests=[manifest],
+                                          planner=planner)
+            print(report.render())
+            return 0
+        try:
+            return asyncio.run(_do_autorun())
+        except RequestBlocked as exc:
+            print(f"blocked: {exc}", file=sys.stderr)
+            return 1
+        finally:
+            db.close()
 
     # Planner commands.
     if args.cmd in ("plan", "run"):
