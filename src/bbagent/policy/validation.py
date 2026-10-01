@@ -131,6 +131,17 @@ def validate_policy(program: ProgramManager) -> PolicyValidationReport:
     if not cfg.allow_unauthenticated and not cfg.test_accounts:
         conflicts.append("authentication required but no authorized test identities configured")
 
+    # Browser profiles must never be shared between identities.
+    seen_profiles: dict[str, str] = {}
+    for a in cfg.test_accounts:
+        if a.profile_dir_env:
+            if a.profile_dir_env in seen_profiles:
+                conflicts.append(
+                    f"identities '{seen_profiles[a.profile_dir_env]}' and '{a.label}' share "
+                    f"browser profile env '{a.profile_dir_env}'; profiles must not be shared")
+            else:
+                seen_profiles[a.profile_dir_env] = a.label
+
     ready = not (conflicts or ambiguities or review)
     return PolicyValidationReport(
         program=cfg.name, ready=ready, dry_run_only=cfg.dry_run_only, summary=summary,

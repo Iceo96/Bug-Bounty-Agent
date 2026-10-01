@@ -31,7 +31,7 @@ from bbagent.planner.planner import DeterministicPlanner, PlanContext, Planner
 from bbagent.program.manager import ProgramManager
 from bbagent.storage.db import Database
 from bbagent.storage.evidence import EvidenceStore
-from bbagent.storage.models import Hypothesis, Observation
+from bbagent.storage.models import Hypothesis, HypothesisStatus, Observation
 from bbagent.urlutils import templatize_path, host_port
 from bbagent.verification.dedup import compute_dedup_key
 from bbagent.verification.engine import VerificationEngine
@@ -52,6 +52,8 @@ class PlanRunner:
         capabilities: CapabilityRegistry | None = None,
         budget: TestBudget | None = None,
         run_store: RunStore | None = None,
+        policy=None,
+        browser_idor=None,
     ):
         self.program = program
         self.db = db
@@ -63,8 +65,13 @@ class PlanRunner:
         self.capabilities = capabilities or default_capabilities()
         self.budget = budget or TestBudget()
         self.runs = run_store or RunStore(db)
+        # A shared policy engine (from the orchestrator) unifies the budget/policy
+        # across recon and verification; otherwise the engine builds its own. The
+        # optional browser-profile IDOR mode is threaded into the engine so profile-
+        # only identities are verified via their own browser contexts (never HTTP).
         self.engine = (
-            VerificationEngine(program, db, http, evidence)
+            VerificationEngine(program, db, http, evidence, policy=policy,
+                               browser_idor=browser_idor)
             if http is not None and evidence is not None else None
         )
 
@@ -74,9 +81,13 @@ class PlanRunner:
         """OBSERVE + GENERATE + PRIORITIZE against the current graph snapshot."""
         ctx = PlanContext(
             program=self.program, surface=self.surface, capabilities=self.capabilities,
-            known_plan_keys=self.runs.known_plan_keys(self.program.name),
+            known_plan_keys=self.runs.known_plan_keys(
+                self.program.name, current_identities=self._identity_count()),
         )
         return self.planner.plan(ctx)
+
+    def _identity_count(self) -> int:
+        return len(self.program.config.test_accounts)
 
     async def run(
         self, *, dry_run: bool = False, stop: Callable[[], bool] | None = None,
@@ -119,7 +130,8 @@ class PlanRunner:
                 break
 
             # OBSERVE / GENERATE / PRIORITIZE (re-plan each iteration).
-            known = self.runs.known_plan_keys(self.program.name) | done_keys
+            known = self.runs.known_plan_keys(
+                self.program.name, current_identities=self._identity_count()) | done_keys
             ctx = PlanContext(self.program, self.surface, self.capabilities, known)
             queue = [h for h in self.planner.plan(ctx) if h.plan_key not in done_keys]
             if not queue:
@@ -205,6 +217,21 @@ class PlanRunner:
             summary.verified += 1
             summary.findings_created += 1
             self._record_observation(ph, outcome="verified", detail=finding.id)
+            return
+
+        # No finding. Distinguish INCONCLUSIVE (a missing prerequisite — preserved,
+        # NOT disproven, kept for human review, suppressed from regeneration until
+        # the prerequisite changes) from a genuine DISPROOF.
+        stored = self.db.get_hypothesis(storage_hyp.id)
+        reason = getattr(storage_hyp, "inconclusive_reason", None)
+        is_inconclusive = reason is not None or (
+            stored is not None and stored.status is HypothesisStatus.INCONCLUSIVE)
+        if is_inconclusive:
+            ph.status = PlanStatus.INCONCLUSIVE
+            ph.status_reason = reason or "INCONCLUSIVE"
+            ph.prereq_identities = self._identity_count()   # revisit only if this grows
+            summary.inconclusive += 1
+            self._record_observation(ph, outcome="inconclusive", detail=ph.status_reason)
         else:
             ph.status = PlanStatus.DISPROVEN
             summary.disproven += 1

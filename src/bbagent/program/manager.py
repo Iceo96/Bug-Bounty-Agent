@@ -62,6 +62,18 @@ class ProgramManager:
             return None
         return os.getenv(acct.secret_env)
 
+    def resolve_profile_dir(self, label: str) -> Optional[str]:
+        """Resolve a test identity's OWN persistent browser-profile directory.
+
+        Only the env-var name lives in the config; the resolved path is used to
+        point the browser at that identity's profile. Returns ``None`` if the
+        account or the env var is absent. The value is never printed or stored.
+        """
+        acct = self.test_account(label)
+        if acct is None or not acct.profile_dir_env:
+            return None
+        return os.getenv(acct.profile_dir_env)
+
     def is_method_allowed(self, method: str) -> bool:
         return method.upper() in self.config.restrictions.allowed_methods
 

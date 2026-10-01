@@ -1,0 +1,170 @@
+# =============================================================================
+# Temu Bug Bounty program — ProgramPolicy from the supplied HackerOne policy +
+# scope CSV ONLY. FAIL CLOSED. No permission is invented.
+#
+# CONTROLLED PILOT (operator-authorized): GET-only, request budget 20, ~1 rps,
+# classes idor/privilege_escalation/sql_injection (reflected/DOM XSS FORBIDDEN).
+# Exact Temu scope, DataScope enforcement, PolicyGateway, RunBudget, evidence
+# integrity, VerificationEngine, human review, no auto-submission, and the browser
+# live gate all remain UNCHANGED. Real execution additionally requires the explicit
+# --live flag AND the BBAGENT_BROWSER_LIVE=1 environment opt-in (neither set here).
+# =============================================================================
+
+name: "temu-bug-bounty"
+platform: "hackerone"
+authorized: true
+dry_run_only: false
+
+scope:
+  # ONLY the supplied web assets. NO *.temu.com wildcard. Exact hosts only.
+  in_scope:
+    - {kind: domain, value: "www.temu.com"}
+    - {kind: domain, value: "seller.temu.com"}
+    - {kind: domain, value: "partner.temu.com"}
+    - {kind: domain, value: "ads.temu.com"}
+  # Mobile assets from the CSV (com.einnovation.temu = Android package,
+  # 1641486558 = iOS App Store id) are NOT HTTP-testable by the current tools and
+  # are represented under needs_human_review, not as HTTP scope.
+  excluded: []
+
+restrictions:
+  # Controlled pilot: GET only (read-only). No state-changing methods.
+  allowed_methods: ["GET"]
+  allow_active_testing: false
+  forbidden_paths: []
+
+# Controlled pilot rate limit: ~1 request/second, no concurrency.
+rate_limit:
+  requests_per_second: 1
+  max_concurrent: 1
+
+# Program-required headers whose VALUES are resolved from environment variables at
+# runtime and are NEVER hardcoded. The agent/LLM/tools cannot set or override these.
+# Temu's web session authenticates via a Cookie header and a VerifyAuthToken header
+# (not an Authorization: Bearer token), so both are injected here from the env.
+required_header_refs:
+  X-HackerOne-Research: "BBAGENT_H1_USERNAME"
+  Cookie: "BBAGENT_TEMU_COOKIE"
+  VerifyAuthToken: "BBAGENT_TEMU_VERIFY_AUTH_TOKEN"
+
+# Two researcher-owned identities, EACH with its own manually-authenticated,
+# persistent browser profile (profile directory resolved from the referenced env
+# var; never shared, never stored/printed here). Identity A also carries the
+# program session headers (Cookie / VerifyAuthToken env, above). With two authorized
+# identities the differential detectors (IDOR/BFLA) are no longer INCONCLUSIVE on
+# identity count. Own accounts/data only.
+test_accounts:
+  - label: "researcher"
+    role: "user"
+    username: "self-registered"
+    profile_dir_env: "BBAGENT_TEMU_PROFILE_A"
+    notes: "Identity A — existing researcher profile. Session via its own persistent browser profile (BBAGENT_TEMU_PROFILE_A) + Cookie/VerifyAuthToken env. Own accounts/data only."
+  - label: "researcher_b"
+    role: "user"
+    username: "self-registered-b"
+    profile_dir_env: "BBAGENT_TEMU_PROFILE_B"
+    notes: "Identity B — SEPARATE researcher-owned account, manually authenticated in its OWN persistent browser profile (BBAGENT_TEMU_PROFILE_B). No secret_env; its session lives only inside that profile and is never shared with A. Own accounts/data only."
+
+# Unauthenticated testing permission is NOT stated -> fail closed.
+allow_unauthenticated: false
+
+# Controlled pilot: recon (scope-driven discovery) + http (policy-gated GET).
+allowed_tools: ["recon", "http"]
+
+# Temu publishes an explicit "Out of scope vulnerabilities" list, so a class that
+# is NOT on that list is treated as permitted (subject to ALL other policy gates:
+# scope, identity, data-scope, required header, method, budget, verification).
+# Of our implemented detectors, only reflected XSS is explicitly out of scope, so
+# it is omitted here and FORBIDDEN (see forbidden_actions). Every request for an
+# allowed class still passes the centralized PolicyGatedHTTP before transport.
+allowed_vulnerability_classes:
+  - "idor"
+  - "privilege_escalation"
+  - "sql_injection"
+
+# Controlled pilot: hard cap of 20 requests for the entire run (one shared RunBudget).
+request_budget:
+  total: 20
+  per_target: 20
+  per_tool: 20
+
+# Only the researcher's own data may be referenced. No authorized object ids are
+# published, so data-scoping is enforced with an empty allow-list (deny all id-like
+# references) until a human supplies the researcher's authorized entities.
+data_scope:
+  enforce: true
+  authorized_object_ids: []
+  authorized_url_prefixes: []
+
+# Program-declared out-of-scope categories, preserved verbatim as slugs. Never
+# converted into permissions. Includes Temu's web and mobile exclusions.
+forbidden_actions:
+  - "crlf"
+  - "self-xss"
+  - "tabnabbing"
+  - "email-spoofing"
+  - "session-fixation"
+  - "content-spoofing"
+  - "account-brute-force"
+  - "missing-cookie-flags"
+  - "best-practice-only"
+  - "html-content-injection"
+  - "clickjacking"
+  - "ui-redressing"
+  - "dom-xss"
+  - "reflected-xss"
+  - "tls-ssl-issues"
+  - "spf-dmarc-dkim-non-email-domains"
+  - "mitm-physical-access"
+  - "payment-processors"
+  - "victim-device-attacks"
+  - "mass-entity-creation"
+  - "csrf-unauthenticated-no-sensitive-action"
+  - "public-zero-day-under-one-month"
+  - "physical-social-engineering"
+  - "unlikely-user-interaction"
+  - "low-impact-csrf"
+  - "unverified-scanner-results"
+  - "dos"
+  - "disruption"
+  - "outdated-browser-platform"
+  - "rate-limit-bruteforce-non-auth"
+  - "low-impact-error-disclosure"
+  - "vulnerable-library-no-poc"
+  - "open-redirect-no-impact"
+  - "csv-injection-no-vuln"
+  - "missing-security-headers-no-vuln"
+  - "low-impact-info-leakage"
+  # Mobile exclusions:
+  - "mobile:clipboard-shared-links"
+  - "mobile:malicious-app-required"
+  - "mobile:sensitive-data-in-urls-over-tls"
+  - "mobile:lack-of-obfuscation"
+  - "mobile:path-disclosure-in-binary"
+  - "mobile:lack-of-jailbreak-root-detection"
+  - "mobile:malformed-url-scheme-crash"
+  - "mobile:lack-of-binary-protection"
+  - "mobile:snapshot-pasteboard-leakage"
+  - "mobile:runtime-hacking-jailbroken"
+
+# Operator-signed-off for the controlled pilot. The former review items are now
+# resolved: methods (GET), tooling (recon+http), budget (20), rate (~1 rps), classes
+# (idor/privilege_escalation/sql_injection; XSS forbidden), unauthenticated testing
+# (still false), H1 username + session credentials supplied via env. DataScope
+# remains ENFORCED with an empty allow-list (deny-all id-like references), so
+# object-scoped tests still fail closed at runtime until a human supplies authorized
+# entities. The permanent guardrails below are recorded under notes, not as scope.
+needs_human_review: []
+
+notes:
+  - "In-scope web assets (CSV, bounty-eligible): www.temu.com, seller.temu.com,"
+  - "partner.temu.com, ads.temu.com. Mobile: com.einnovation.temu, 1641486558."
+  - "Researchers may create a free account; use the HackerOne email alias."
+  - "Only interact with accounts/data you own or are explicitly permitted to use."
+  - "Good-faith: avoid privacy violations, data destruction, and service disruption."
+  - "Social engineering is prohibited. Ask the program team before testing unscoped subdomains."
+  - "Reflected XSS and DOM XSS are explicitly out of scope (FORBIDDEN)."
+  - "Mobile assets com.einnovation.temu (Android) and 1641486558 (iOS) are NOT HTTP-testable."
+  - "Unscoped subdomains must NOT be tested; ask the program team before submitting."
+  - "DataScope is enforced with an empty allow-list: object-scoped tests fail closed"
+  - "until authorized researcher-owned object identifiers are supplied."

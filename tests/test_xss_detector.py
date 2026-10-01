@@ -8,7 +8,7 @@ import httpx
 import pytest
 
 from bbagent.config.models import (
-    ProgramConfig, RateLimit, ScopeConfig, ScopeKind, ScopeRule, TestingRestrictions,
+    PolicyBudget, ProgramConfig, RateLimit, ScopeConfig, ScopeKind, ScopeRule, TestingRestrictions,
 )
 from bbagent.detectors.base import VerificationContext
 from bbagent.detectors.xss import ReflectedXSSVerifier, analyze_reflection
@@ -31,6 +31,10 @@ def _program():
         restrictions=TestingRestrictions(allowed_methods=["GET", "HEAD", "OPTIONS"],
                                          allow_active_testing=False),
         rate_limit=RateLimit(requests_per_second=100, max_concurrent=8),
+        allowed_tools=["http"],
+        allowed_vulnerability_classes=["reflected_xss"],
+        allow_unauthenticated=True,
+        request_budget=PolicyBudget(),
     ))
 
 

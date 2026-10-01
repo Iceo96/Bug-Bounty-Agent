@@ -37,6 +37,37 @@ class RequestBlocked(Exception):
     """Raised when a request is blocked before it leaves the process."""
 
 
+class RunBudget:
+    """A single, shared, run-level request budget.
+
+    Every outbound HTTP request converges at ``AuthorizedHTTPClient.request`` and
+    consumes from this one counter, so recon, discovery, tool execution, and
+    detector verification all draw from the same budget. It only ever increments
+    (no reset), and nothing in a ToolRequest can modify it.
+    """
+
+    def __init__(self, max_requests: int):
+        self._max = int(max_requests)
+        self._used = 0
+
+    @property
+    def used(self) -> int:
+        return self._used
+
+    @property
+    def max_requests(self) -> int:
+        return self._max
+
+    def remaining(self) -> int:
+        return self._max - self._used
+
+    def consume(self) -> None:
+        """Reserve one request, or raise before the request can reach transport."""
+        if self._used >= self._max:
+            raise RequestBlocked(f"run request budget exhausted ({self._max})")
+        self._used += 1
+
+
 @dataclass
 class HTTPExchange:
     """A captured request/response pair — the raw material for evidence."""
@@ -62,6 +93,7 @@ class AuthorizedHTTPClient:
         *,
         timeout: float = 20.0,
         transport: Optional[httpx.BaseTransport] = None,
+        run_budget: Optional["RunBudget"] = None,
     ):
         self._program = program
         self._scope = ScopeEngine(program.scope)
@@ -70,6 +102,8 @@ class AuthorizedHTTPClient:
         # A transport may be injected for testing; production leaves it None.
         self._transport = transport
         self._client: Optional[httpx.AsyncClient] = None
+        # The single shared run-level budget (recon + discovery + verification).
+        self._run_budget = run_budget
         # Number of requests that actually left the process — used by budgets.
         self.request_count = 0
 
@@ -116,13 +150,23 @@ class AuthorizedHTTPClient:
         if method in _ACTIVE_METHODS and not r.allow_active_testing:
             raise RequestBlocked(f"active method {method} blocked: program is passive-only")
 
-    def _merge_headers(self, headers: Optional[Mapping[str, str]]) -> dict[str, str]:
-        # Caller-supplied first, then program-required headers OVERWRITE them so a
-        # required header can never be removed or overridden. Env-referenced
-        # required headers are resolved last (values never come from the caller/LLM).
-        merged: dict[str, str] = dict(headers or {})
-        merged.update(self._program.required_headers)
+        # Fail closed if any env-referenced required header (e.g. Cookie /
+        # VerifyAuthToken / X-HackerOne-Research) is missing — before transport.
         for name, env_var in getattr(self._program, "required_header_refs", {}).items():
+            if os.getenv(env_var) is None:
+                raise RequestBlocked(f"required header {name!r} unavailable (env {env_var} unset)")
+
+    def _merge_headers(self, headers: Optional[Mapping[str, str]]) -> dict[str, str]:
+        # A caller/LLM can never remove or override a required header. We drop any
+        # caller header whose name case-insensitively matches a required header
+        # (literal or env-referenced), then inject the canonical required values —
+        # env-referenced ones resolved last from the environment (never the caller).
+        refs = getattr(self._program, "required_header_refs", {})
+        reserved = {k.lower() for k in self._program.required_headers} | {k.lower() for k in refs}
+        merged: dict[str, str] = {k: v for k, v in dict(headers or {}).items()
+                                  if k.lower() not in reserved}
+        merged.update(self._program.required_headers)
+        for name, env_var in refs.items():
             value = os.getenv(env_var)
             if value is not None:
                 merged[name] = value
@@ -146,6 +190,11 @@ class AuthorizedHTTPClient:
         method = method.upper()
         self._preflight(method, url)
         final_headers = self._merge_headers(headers)
+
+        # Consume the shared run-level budget AFTER other gates but BEFORE any
+        # transport activity, so an exhausted budget denies without a request.
+        if self._run_budget is not None:
+            self._run_budget.consume()
 
         async with self._rate.slot(url):
             started = time.perf_counter()

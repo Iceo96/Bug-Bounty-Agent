@@ -1,0 +1,59 @@
+# =============================================================================
+# AUTHORIZATION PROVENANCE RECORD — Temu HackerOne Bug Bounty
+#
+# THIS FILE DOES NOT GRANT AUTHORIZATION. It records WHERE authorization comes
+# from and WHO is accountable for it. Authorization to perform any live testing
+# derives from:
+#   (a) Temu's own PUBLISHED HackerOne program policy (the authoritative source), and
+#   (b) the researcher's attestations at the bottom of this file.
+#
+# The agent never treats this record — nor any field such as `authorized: true`
+# in programs/temu.yaml — as a grant. All enforced controls remain unchanged:
+# the live cyber-safety gate (--live AND BBAGENT_BROWSER_LIVE=1), ScopeEngine,
+# ProgramPolicyEngine, DataScope, RunBudget, human review, and no-auto-submission.
+# This record is loaded read-only and has NO effect on gating (see
+# src/bbagent/program/provenance.py and its tests).
+# =============================================================================
+
+provenance:
+  grants_authorization: false          # explicit: evidence of provenance, NOT a grant
+  program: "Temu — HackerOne Bug Bounty"
+  authorization_source: "Temu's published HackerOne program policy"
+  # Only env-var NAMES are stored here (never the handle/URL values themselves):
+  authorization_source_url_env: "BBAGENT_TEMU_PROGRAM_URL"   # researcher-confirmed program URL
+  researcher_identity_env: "BBAGENT_H1_USERNAME"             # the enrolled HackerOne handle
+
+# Values CAPTURED from the program's published policy, as supplied/captured by the
+# researcher. These MIRROR programs/temu.yaml (the single source of truth the engine
+# actually enforces); they are recorded here only to document their origin. A loader
+# consistency-check fails if they ever drift from the enforced scope.
+captured_from_published_policy:
+  in_scope_http_assets:
+    - "www.temu.com"
+    - "seller.temu.com"
+    - "partner.temu.com"
+    - "ads.temu.com"
+  out_of_scope_rules_ref: "programs/temu.yaml -> forbidden_actions (captured verbatim from the policy)"
+  non_http_assets_not_browser_testable:
+    - "com.einnovation.temu (Android package)"
+    - "1641486558 (iOS App Store id)"
+
+# Controls the agent ENFORCES independently of this record (defense-in-depth):
+enforced_controls:
+  accounts: "only researcher-owned / explicitly-authorized identities (researcher, researcher_b)"
+  third_party_data: "never accessed — own-account objects only; DataScope enforced"
+  methods: "GET only"
+  human_review: "required before any submission"
+  automatic_submission: "never"
+  live_gate: "--live AND BBAGENT_BROWSER_LIVE=1 both required"
+
+# Attestations ONLY the researcher can make. These are NOT derivable from policy
+# text and are NOT verified by the agent — they are the researcher's responsibility.
+researcher_attestations:
+  - "I am an enrolled researcher on Temu's HackerOne program, identified by BBAGENT_H1_USERNAME."
+  - "The captured in-scope assets and out-of-scope rules above are current and accurate as of testing."
+  - "Both 'researcher' and 'researcher_b' are accounts I own or am explicitly authorized to use."
+  - "Any object/endpoint I test references ONLY my own data — never another user's data."
+  - "The program permits authenticated IDOR/BOLA testing on in-scope web assets using my own accounts."
+  - "The program permits the automated/browser tooling approach used here, or I have confirmed it is allowed."
+  - "I accept accountability for initiating any live request; the agent does not do so on my behalf."

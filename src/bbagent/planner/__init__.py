@@ -7,6 +7,12 @@ from bbagent.planner.capabilities import (
     default_capabilities,
 )
 from bbagent.planner.history import RunStore
+from bbagent.planner.matrix import (
+    CapabilityRow,
+    CapabilityStatus,
+    allowed_classes,
+    build_capability_matrix,
+)
 from bbagent.planner.models import (
     PlannedHypothesis,
     Priority,
@@ -29,6 +35,10 @@ __all__ = [
     "EndpointView",
     "default_capabilities",
     "RunStore",
+    "CapabilityRow",
+    "CapabilityStatus",
+    "allowed_classes",
+    "build_capability_matrix",
     "PlannedHypothesis",
     "Priority",
     "PlanStatus",

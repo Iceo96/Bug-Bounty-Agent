@@ -23,6 +23,7 @@ class HypothesisStatus(str, Enum):
     INVESTIGATING = "investigating"
     VERIFYING = "verifying"
     VERIFIED = "verified"     # promoted to a finding
+    INCONCLUSIVE = "inconclusive"  # could not be decided (e.g. a missing prerequisite)
     DISCARDED = "discarded"
 
 

@@ -96,6 +96,12 @@ class TestAccount(BaseModel):
     # Reference to an environment variable holding the secret, e.g. "BBAGENT_ACCT_A_PASS".
     # We never store raw credentials in the config file.
     secret_env: Optional[str] = None
+    # Reference to an environment variable holding this identity's OWN persistent
+    # browser-profile directory (its manually-authenticated Chromium profile). Each
+    # authorized identity must reference a DISTINCT profile — profiles are never
+    # shared between identities. Like secret_env, only the env-var NAME lives in the
+    # config; the path (and the session inside it) is never stored or printed here.
+    profile_dir_env: Optional[str] = None
     notes: Optional[str] = None
 
 

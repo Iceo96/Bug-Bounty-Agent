@@ -63,6 +63,10 @@ class VerificationResult:
     test_identity: str = "unauthenticated"
     dedup_key: Optional[str] = None
     reproduction: str = ""
+    # True when the attempt could not be decided (a missing prerequisite, e.g. a
+    # second authorized identity) — NOT a disproof. The engine preserves this as
+    # an INCONCLUSIVE state rather than discarding it as disproven.
+    inconclusive: bool = False
 
 
 class Detector(ABC):

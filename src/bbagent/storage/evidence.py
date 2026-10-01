@@ -35,6 +35,18 @@ def _sha256(data: bytes) -> str:
     return hashlib.sha256(data).hexdigest()
 
 
+# Header names whose values are authentication material and must never be stored.
+_REDACT_HEADERS = {
+    "authorization", "cookie", "set-cookie", "verifyauthtoken", "x-verify-auth-token",
+    "proxy-authorization", "x-api-key", "x-auth-token",
+}
+_REDACTED = "[REDACTED]"
+
+
+def _redact_auth_headers(headers: dict[str, str]) -> dict[str, str]:
+    return {k: (_REDACTED if k.lower() in _REDACT_HEADERS else v) for k, v in headers.items()}
+
+
 class EvidenceStore:
     def __init__(self, db: Database, root: str | Path):
         self._db = db
@@ -87,17 +99,21 @@ class EvidenceStore:
         finding_id: Optional[str] = None,
         hypothesis_id: Optional[str] = None,
     ) -> tuple[EvidenceRecord, EvidenceRecord]:
-        """Store an HTTP exchange as two blobs: the request and the response."""
+        """Store an HTTP exchange as two blobs: the request and the response.
+
+        Authentication material (Cookie, VerifyAuthToken, Authorization, Set-Cookie,
+        etc.) is redacted so secrets never land in evidence or reports.
+        """
         req = {
             "method": exchange.method,
             "url": exchange.url,
-            "headers": exchange.request_headers,
+            "headers": _redact_auth_headers(exchange.request_headers),
             "body": exchange.request_body,
             "started_at": exchange.started_at,
         }
         resp = {
             "status_code": exchange.status_code,
-            "headers": exchange.response_headers,
+            "headers": _redact_auth_headers(exchange.response_headers),
             "body": exchange.response_body,
             "elapsed_ms": exchange.elapsed_ms,
         }

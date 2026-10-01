@@ -46,12 +46,14 @@ class DeterministicPlanner(Planner):
     """Rule-based, reproducible planner. No randomness, no network, no LLM."""
 
     def plan(self, ctx: PlanContext) -> list[PlannedHypothesis]:
+        from bbagent.planner.matrix import allowed_classes as _allowed_classes
+
         program_name = ctx.program.name
         candidates: dict[str, PlannedHypothesis] = {}
-        # Respect a program's vulnerability-class allowlist when one is declared.
-        # (Empty = no planner-level restriction, so existing programs are unchanged;
-        # the policy engine still fail-closes on explicit tool requests.)
-        allowed_classes = set(ctx.program.config.allowed_vulnerability_classes)
+        # Only vulnerability classes the capability matrix marks ALLOWED may run.
+        # UNKNOWN and FORBIDDEN classes are never planned (fail-closed): the absence
+        # of a prohibition is not permission.
+        allowed_classes = _allowed_classes(ctx.program, ctx.capabilities)
 
         for ep in ctx.surface.list_endpoints(program_name):
             view = EndpointView(
@@ -64,8 +66,8 @@ class DeterministicPlanner(Planner):
             template = templatize_path(urlsplit(ep.url).path or "/")
 
             for cap in ctx.capabilities.all():
-                if allowed_classes and cap.vuln_class not in allowed_classes:
-                    continue  # program forbids this vulnerability class
+                if cap.vuln_class not in allowed_classes:
+                    continue  # not ALLOWED by the capability matrix (fail-closed)
                 cand = cap.propose(view, ctx.program)
                 if cand is None:
                     continue

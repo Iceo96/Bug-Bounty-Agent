@@ -17,7 +17,8 @@ from pydantic import BaseModel, Field
 
 from bbagent.tools.base import Tool, ToolError
 
-_REDACT_HEADERS = {"authorization", "cookie", "set-cookie", "proxy-authorization", "x-api-key"}
+_REDACT_HEADERS = {"authorization", "cookie", "set-cookie", "verifyauthtoken",
+                   "x-verify-auth-token", "proxy-authorization", "x-api-key", "x-auth-token"}
 _REDACTED = "[REDACTED]"
 
 

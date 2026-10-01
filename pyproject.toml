@@ -27,6 +27,12 @@ dev = [
 llm = [
     "anthropic>=0.40",
 ]
+# Optional real browser backend for the authenticated browser controller. The
+# passive HAR-ingest and the controller's logic work without it; only the live
+# PlaywrightBackend needs it (also run `playwright install chromium`).
+browser = [
+    "playwright>=1.40",
+]
 
 [project.scripts]
 bbagent = "bbagent.cli:main"

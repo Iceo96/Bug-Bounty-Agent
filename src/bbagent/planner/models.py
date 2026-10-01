@@ -69,6 +69,13 @@ class PlannedHypothesis:
     storage_hypothesis_id: str | None = None
     finding_id: str | None = None
     created_at: float = field(default_factory=time.time)
+    # For an INCONCLUSIVE outcome: the reason, and the prerequisite fingerprint at
+    # evaluation time (number of authorized identities). The candidate is suppressed
+    # from regeneration while this count is unchanged; a NEW authorized identity
+    # (count increases) makes it eligible to be revisited. New evidence changes the
+    # plan_key itself, so it is re-planned naturally.
+    status_reason: str = ""
+    prereq_identities: int = 0
 
     @property
     def priority(self) -> Priority:

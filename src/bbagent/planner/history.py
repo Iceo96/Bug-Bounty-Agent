@@ -44,6 +44,8 @@ CREATE TABLE IF NOT EXISTS planner_hypotheses (
     priority_score INTEGER NOT NULL DEFAULT 0,
     priority_band TEXT NOT NULL DEFAULT 'LOW',
     status TEXT NOT NULL,
+    status_reason TEXT NOT NULL DEFAULT '',
+    prereq_identities INTEGER NOT NULL DEFAULT 0,
     parent_observation TEXT,
     storage_hypothesis_id TEXT,
     finding_id TEXT,
@@ -62,6 +64,16 @@ class RunStore:
         self._db = db
         self._c = db.connection
         self._c.executescript(_SCHEMA)
+        # Additive migration for databases created before the INCONCLUSIVE-state
+        # columns existed. Each ADD COLUMN is a no-op if the column already exists.
+        for ddl in (
+            "ALTER TABLE planner_hypotheses ADD COLUMN status_reason TEXT NOT NULL DEFAULT ''",
+            "ALTER TABLE planner_hypotheses ADD COLUMN prereq_identities INTEGER NOT NULL DEFAULT 0",
+        ):
+            try:
+                self._c.execute(ddl)
+            except Exception:  # noqa: BLE001 - column already present
+                pass
         self._c.commit()
 
     # --- runs -----------------------------------------------------------------
@@ -112,33 +124,67 @@ class RunStore:
         ).fetchone()
         if exists:
             self._c.execute(
-                "UPDATE planner_hypotheses SET status=?, storage_hypothesis_id=?, finding_id=?,"
-                " updated_at=? WHERE run_id=? AND id=?",
-                (ph.status.value, ph.storage_hypothesis_id, ph.finding_id, now, run_id,
-                 ph.hypothesis_id),
+                "UPDATE planner_hypotheses SET status=?, status_reason=?, prereq_identities=?,"
+                " storage_hypothesis_id=?, finding_id=?, updated_at=? WHERE run_id=? AND id=?",
+                (ph.status.value, ph.status_reason, ph.prereq_identities,
+                 ph.storage_hypothesis_id, ph.finding_id, now, run_id, ph.hypothesis_id),
             )
         else:
             self._c.execute(
                 "INSERT INTO planner_hypotheses(id, run_id, program, plan_key, vulnerability_class,"
                 " target, endpoint, method, reasoning, required_auth_context, required_inputs,"
-                " expected_signal, priority_score, priority_band, status, parent_observation,"
-                " storage_hypothesis_id, finding_id, created_at, updated_at)"
-                " VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+                " expected_signal, priority_score, priority_band, status, status_reason,"
+                " prereq_identities, parent_observation, storage_hypothesis_id, finding_id,"
+                " created_at, updated_at)"
+                " VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
                 (ph.hypothesis_id, run_id, program, ph.plan_key,
                  ph.vulnerability_class, ph.target, ph.endpoint, ph.method, ph.reasoning,
                  json.dumps(ph.required_auth_context), json.dumps(ph.required_inputs),
                  ph.expected_signal, ph.priority_score, ph.priority.value, ph.status.value,
+                 ph.status_reason, ph.prereq_identities,
                  ph.parent_observation, ph.storage_hypothesis_id, ph.finding_id, now, now),
             )
         self._c.commit()
 
-    def known_plan_keys(self, program: str) -> set[str]:
-        """Plan keys already verified in prior runs (to prevent regeneration)."""
+    def known_plan_keys(self, program: str, *, current_identities: int | None = None) -> set[str]:
+        """Plan keys that must NOT be regenerated.
+
+        * VERIFIED and DISPROVEN keys are always suppressed: that exact candidate was
+          already evaluated in a prior round, so it is not re-tested (this stops the
+          budget churn from regenerating disproven candidates every round). Materially
+          new evidence changes the ``plan_key`` (it encodes class+endpoint+object-refs)
+          and so is re-planned regardless — the suppression is per exact candidate.
+        * INCONCLUSIVE keys are suppressed while their prerequisite is unchanged. The
+          prerequisite tracked here is the number of authorized identities: an
+          INCONCLUSIVE candidate is re-eligible only once MORE identities are available
+          than when it was evaluated (``current_identities`` exceeds the stored
+          ``prereq_identities``).
+        """
+        keys = {
+            r["plan_key"] for r in self._c.execute(
+                "SELECT DISTINCT plan_key FROM planner_hypotheses WHERE program=?"
+                " AND status IN ('verified','disproven')",
+                (program,),
+            ).fetchall()
+        }
+        for r in self._c.execute(
+            "SELECT plan_key, prereq_identities FROM planner_hypotheses"
+            " WHERE program=? AND status=?", (program, "inconclusive"),
+        ).fetchall():
+            if current_identities is None or current_identities <= r["prereq_identities"]:
+                keys.add(r["plan_key"])           # prerequisite unchanged -> suppress
+        return keys
+
+    def inconclusive_hypotheses(self, program: str) -> list[dict]:
+        """INCONCLUSIVE candidates preserved for HUMAN review (latest row per key)."""
         rows = self._c.execute(
-            "SELECT DISTINCT plan_key FROM planner_hypotheses WHERE program=? AND status=?",
-            (program, "verified"),
+            "SELECT * FROM planner_hypotheses WHERE program=? AND status='inconclusive'"
+            " ORDER BY updated_at DESC", (program,),
         ).fetchall()
-        return {r["plan_key"] for r in rows}
+        seen: dict[str, dict] = {}
+        for r in rows:
+            seen.setdefault(r["plan_key"], dict(r))
+        return list(seen.values())
 
     def hypotheses_for_run(self, run_id: str) -> list[dict]:
         rows = self._c.execute(

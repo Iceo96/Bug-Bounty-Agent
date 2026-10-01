@@ -268,7 +268,33 @@ def _print_endpoints(surface: SurfaceStore, program: str, as_json: bool) -> None
 
 # --- main ---------------------------------------------------------------------
 
+def _load_env() -> None:
+    """Load the project's git-ignored .env into the process environment.
+
+    Uses python-dotenv if available. Existing environment variables win (no
+    override), and values are never printed or persisted anywhere — only made
+    available to os.getenv for required-header/identity resolution at runtime.
+    """
+    try:
+        from dotenv import load_dotenv
+    except ImportError:
+        return
+    load_dotenv(override=False)
+
+
+def _make_browser_backend(profile_dir: str | None, *, headless: bool):
+    """Construct the real browser backend, wiring the persistent profile through.
+
+    ``profile_dir`` is the operator's pre-authenticated Chromium profile. It is
+    only passed to Playwright; its contents are never read, copied, or persisted
+    by the agent.
+    """
+    from bbagent.browser.playwright_backend import PlaywrightBackend
+    return PlaywrightBackend(headless=headless, user_data_dir=profile_dir)
+
+
 def main(argv: list[str] | None = None) -> int:
+    _load_env()
     configure_logging()
     parser = argparse.ArgumentParser(prog="bbagent", description="Authorized bug bounty research agent")
     parser.add_argument("--db", default=None, help="SQLite path (default $BBAGENT_DB_PATH or ./data/bbagent.db)")
@@ -284,6 +310,11 @@ def main(argv: list[str] | None = None) -> int:
     p_polcheck = sub.add_parser("policy-check", help="Validate a program policy (fail-closed)")
     p_polcheck.add_argument("config")
 
+    p_pilot = sub.add_parser("pilot", help="Pre-flight gate for a controlled real pilot (LIVE off by default)")
+    p_pilot.add_argument("config")
+    p_pilot.add_argument("--live", action="store_true", help="Request live mode (still requires readiness + confirmation)")
+    p_pilot.add_argument("--yes", action="store_true", help="Skip the interactive confirmation")
+
     p_polsim = sub.add_parser("policy-simulate",
                               help="Dry-run: show policy decisions for hypothetical actions (no network)")
     p_polsim.add_argument("config")
@@ -294,6 +325,90 @@ def main(argv: list[str] | None = None) -> int:
     p_recon.add_argument("--manifest", help="Discovery manifest URL (in scope)")
     p_recon.add_argument("--crawl", help="Seed URL to crawl (in scope)")
     p_recon.add_argument("--max-pages", type=int, default=25)
+
+    p_observe = sub.add_parser(
+        "observe",
+        help="Ingest an authenticated browser session's network log (HAR) into the "
+             "attack surface. NO requests are sent; scope is enforced fail-closed.")
+    p_observe.add_argument("config", help="Program config path")
+    p_observe.add_argument("--har", required=True,
+                           help="Path to a HAR export from the authenticated browser session")
+    p_observe.add_argument("--identity", default="researcher",
+                           help="Identity label for authenticated traffic (default: researcher)")
+    p_observe.add_argument("--json", action="store_true")
+
+    p_login = sub.add_parser(
+        "browser-login",
+        help="Open a HEADED browser using a persistent profile directory so you can "
+             "log in manually. Reuse that same --profile-dir later with research/"
+             "explore/browse. The agent never reads or persists the profile contents.")
+    p_login.add_argument("--profile-dir", required=True,
+                         help="Directory to store the persistent Chromium profile (created if absent)")
+    p_login.add_argument("--url", default="https://www.temu.com/",
+                         help="Page to open for login (default: Temu home)")
+
+    p_browse = sub.add_parser(
+        "browse",
+        help="Launch an authenticated browser session and perform CONTROLLED "
+             "exploration, ingesting observed traffic. Real execution is gated: "
+             "refused while a program is dry_run_only (e.g. Temu).")
+    p_browse.add_argument("config", help="Program config path")
+    p_browse.add_argument("--steps", required=True,
+                          help="JSON file: a list of {action,target,text,amount} steps")
+    p_browse.add_argument("--identity", default="researcher",
+                          help="Identity label for authenticated traffic (default: researcher)")
+    p_browse.add_argument("--live", action="store_true",
+                          help="Opt in to a REAL browser session (also needs BBAGENT_BROWSER_LIVE=1)")
+    p_browse.add_argument("--headed", action="store_true", help="Show the browser window")
+    p_browse.add_argument("--profile-dir", default=None,
+                          help="Persistent Chromium profile dir (pre-authenticated session)")
+    p_browse.add_argument("--json", action="store_true")
+
+    p_explore = sub.add_parser(
+        "explore",
+        help="Autonomously explore an app's attack surface (no fixed steps). Real "
+             "execution is gated: refused while a program is dry_run_only (e.g. Temu).")
+    p_explore.add_argument("config", help="Program config path")
+    p_explore.add_argument("--seed", action="append", default=None,
+                           help="In-scope seed URL to start from (repeatable)")
+    p_explore.add_argument("--seed-scope", action="store_true",
+                           help="Also seed from every configured in-scope web origin "
+                                "(exact-host/url-prefix rules; never a wildcard)")
+    p_explore.add_argument("--identity", default="researcher")
+    p_explore.add_argument("--live", action="store_true",
+                           help="Opt in to a REAL browser session (also needs BBAGENT_BROWSER_LIVE=1)")
+    p_explore.add_argument("--headed", action="store_true", help="Show the browser window")
+    p_explore.add_argument("--profile-dir", default=None,
+                           help="Persistent Chromium profile dir (pre-authenticated session)")
+    p_explore.add_argument("--llm", action="store_true",
+                           help="Use the LLM to choose actions (falls back to deterministic)")
+    p_explore.add_argument("--max-actions", type=int, default=40)
+    p_explore.add_argument("--max-pages", type=int, default=15)
+    p_explore.add_argument("--max-seconds", type=float, default=60.0)
+    p_explore.add_argument("--json", action="store_true")
+
+    p_research = sub.add_parser(
+        "research",
+        help="Run the Security Research Loop (explore<->test). Real execution is "
+             "gated: refused while a program is dry_run_only (e.g. Temu).")
+    p_research.add_argument("config", help="Program config path")
+    p_research.add_argument("--seed", action="append", default=None,
+                            help="In-scope seed URL to start exploration from (repeatable)")
+    p_research.add_argument("--seed-scope", action="store_true",
+                            help="Also seed from every configured in-scope web origin "
+                                 "(exact-host/url-prefix rules; never a wildcard)")
+    p_research.add_argument("--identity", default="researcher")
+    p_research.add_argument("--preflight", action="store_true",
+                            help="Run readiness checks only; no navigation, no target traffic")
+    p_research.add_argument("--live", action="store_true",
+                            help="Opt in to REAL execution (also needs BBAGENT_BROWSER_LIVE=1)")
+    p_research.add_argument("--headed", action="store_true")
+    p_research.add_argument("--profile-dir", default=None,
+                            help="Persistent Chromium profile dir (operator's pre-authenticated "
+                                 "session). Only passed to the browser; contents never read/persisted.")
+    p_research.add_argument("--max-rounds", type=int, default=3)
+    p_research.add_argument("--max-seconds", type=float, default=120.0)
+    p_research.add_argument("--json", action="store_true")
 
     p_assets = sub.add_parser("assets", help="List discovered assets")
     p_assets.add_argument("program")
@@ -351,6 +466,41 @@ def main(argv: list[str] | None = None) -> int:
     args = parser.parse_args(argv)
     db_path = args.db or _default_db()
 
+    # Pilot gate (config-only; NEVER sends a request in this command).
+    if args.cmd == "pilot":
+        from bbagent.pilot import preflight
+        try:
+            program = ProgramManager.from_file(args.config)
+        except ProgramConfigError as exc:
+            print(f"error: {exc}", file=sys.stderr)
+            return 2
+        report = preflight(program, live=args.live)
+        print(report.render())
+        if not args.live:
+            print("\nLIVE mode is OFF (default). No requests will be sent.")
+            return 0
+        if not report.ready:
+            print("\nREFUSING to go live: unresolved blockers above. No requests will be sent.",
+                  file=sys.stderr)
+            return 2
+        if program.config.dry_run_only:
+            print("\nREFUSING to go live: program is dry_run_only. No requests will be sent.",
+                  file=sys.stderr)
+            return 2
+        # Ready + live requested: require explicit human confirmation. (Even then,
+        # this command does not itself execute a run.)
+        if not args.yes:
+            try:
+                answer = input(f"Type the program name '{program.name}' to CONFIRM live pilot: ")
+            except EOFError:
+                answer = ""
+            if answer.strip() != program.name:
+                print("live pilot aborted (confirmation did not match). No requests sent.")
+                return 1
+        print("\nConfirmed. The system is READY for a controlled live pilot; launch it with the "
+              "autonomous run once you have reviewed the pre-flight above.")
+        return 0
+
     # Policy adapter commands (config-only; NO network).
     if args.cmd in ("policy-check", "policy-simulate"):
         from bbagent.policy.validation import simulate, validate_policy
@@ -403,6 +553,226 @@ def main(argv: list[str] | None = None) -> int:
         except RequestBlocked as exc:
             print(f"blocked: {exc}", file=sys.stderr)
             return 1
+
+    # Passive browser-observation ingest (NO network; scope enforced fail-closed).
+    if args.cmd == "observe":
+        from bbagent.browser import ingest_har
+        from bbagent.surface.models import AuthIdentity
+        try:
+            program = ProgramManager.from_file(args.config)
+        except ProgramConfigError as exc:
+            print(f"error: {exc}", file=sys.stderr)
+            return 2
+        har_path = Path(args.har)
+        if not har_path.is_file():
+            print(f"error: no HAR file at {har_path}", file=sys.stderr)
+            return 2
+        db = Database(db_path)
+        surface = SurfaceStore(db)
+        try:
+            # Authenticated browser traffic is the single researcher identity.
+            identity_map = {args.identity: AuthIdentity.IDENTITY_A}
+            report = ingest_har(
+                program, surface, har_path.read_text(encoding="utf-8", errors="replace"),
+                default_identity=AuthIdentity.IDENTITY_A, identity_map=identity_map,
+            )
+            if args.json:
+                print(json.dumps(report.__dict__, indent=2))
+            else:
+                print(report.render())
+            return 0
+        finally:
+            db.close()
+
+    # Controlled authenticated browser exploration (real execution is gated off for
+    # dry-run programs like Temu). Observation only — no vulnerability testing.
+    if args.cmd == "browse":
+        from bbagent.browser import (
+            BrowserController, BrowserLaunchRefused, ExplorationStep, ensure_live_allowed,
+        )
+        from bbagent.browser.playwright_backend import PlaywrightBackend
+        from bbagent.surface.models import AuthIdentity
+        try:
+            program = ProgramManager.from_file(args.config)
+        except ProgramConfigError as exc:
+            print(f"error: {exc}", file=sys.stderr)
+            return 2
+        steps_path = Path(args.steps)
+        if not steps_path.is_file():
+            print(f"error: no steps file at {steps_path}", file=sys.stderr)
+            return 2
+        live = bool(args.live) and os.getenv("BBAGENT_BROWSER_LIVE") == "1"
+        try:
+            ensure_live_allowed(program, live=live)
+        except BrowserLaunchRefused as exc:
+            print(str(exc), file=sys.stderr)
+            return 2
+        try:
+            raw = json.loads(steps_path.read_text(encoding="utf-8"))
+            steps = [ExplorationStep(**s) for s in raw]
+        except (json.JSONDecodeError, TypeError, ValueError) as exc:
+            print(f"error: invalid steps file: {exc}", file=sys.stderr)
+            return 2
+
+        db = Database(db_path)
+        surface = SurfaceStore(db)
+        try:
+            backend = _make_browser_backend(args.profile_dir, headless=not args.headed)
+            controller = BrowserController(
+                program, surface, backend,
+                default_identity=AuthIdentity.IDENTITY_A,
+                identity_map={args.identity: AuthIdentity.IDENTITY_A},
+            )
+            result = asyncio.run(controller.explore(steps))
+            if args.json:
+                print(json.dumps(result.report.__dict__, indent=2))
+            else:
+                print(result.render())
+            return 0
+        finally:
+            db.close()
+
+    # Autonomous browser exploration (real execution gated off for dry-run programs).
+    if args.cmd == "explore":
+        from bbagent.browser import (
+            AutonomousExplorer, BrowserController, BrowserLaunchRefused,
+            ExplorationLimits, LLMExplorationChooser, ensure_live_allowed,
+        )
+        from bbagent.browser.playwright_backend import PlaywrightBackend
+        from bbagent.surface.models import AuthIdentity
+        try:
+            program = ProgramManager.from_file(args.config)
+        except ProgramConfigError as exc:
+            print(f"error: {exc}", file=sys.stderr)
+            return 2
+        live = bool(args.live) and os.getenv("BBAGENT_BROWSER_LIVE") == "1"
+        try:
+            ensure_live_allowed(program, live=live)
+        except BrowserLaunchRefused as exc:
+            print(str(exc), file=sys.stderr)
+            return 2
+
+        seeds = list(args.seed or [])
+        if args.seed_scope:
+            from bbagent.browser import seed_origins_from_scope
+            for o in seed_origins_from_scope(program):
+                if o not in seeds:
+                    seeds.append(o)
+        if not seeds:
+            print("error: provide --seed URL(s) and/or --seed-scope", file=sys.stderr)
+            return 2
+
+        chooser = None
+        if args.llm:
+            try:
+                from bbagent.config.models import LLMConfig
+                from bbagent.llm.reasoner import ReasonerUnavailable, anthropic_complete
+                chooser = LLMExplorationChooser(anthropic_complete(LLMConfig()))
+            except Exception as exc:  # noqa: BLE001 - fall back to deterministic
+                print(f"note: LLM chooser unavailable ({exc}); using deterministic", file=sys.stderr)
+                chooser = None
+
+        db = Database(db_path)
+        surface = SurfaceStore(db)
+        try:
+            backend = _make_browser_backend(args.profile_dir, headless=not args.headed)
+            controller = BrowserController(
+                program, surface, backend,
+                default_identity=AuthIdentity.IDENTITY_A,
+                identity_map={args.identity: AuthIdentity.IDENTITY_A},
+            )
+            limits = ExplorationLimits(max_actions=args.max_actions, max_pages=args.max_pages,
+                                       max_seconds=args.max_seconds)
+            explorer = AutonomousExplorer(controller, surface, chooser=chooser, limits=limits)
+            summary = asyncio.run(explorer.run(seeds))
+            if args.json:
+                print(json.dumps(summary.__dict__, indent=2))
+            else:
+                print(summary.render())
+            return 0
+        finally:
+            db.close()
+
+    # Manual login helper: opens a headed browser with a persistent profile so the
+    # operator can authenticate once. The agent drives nothing and never reads,
+    # copies, uploads, logs, or persists the profile contents.
+    if args.cmd == "browser-login":
+        async def _login() -> int:
+            try:
+                from playwright.async_api import async_playwright
+            except ImportError:
+                print("error: Playwright is not installed in this interpreter. Install with: "
+                      "python -m pip install \"playwright>=1.40\" && python -m playwright install chromium",
+                      file=sys.stderr)
+                return 2
+            async with async_playwright() as pw:
+                ctx = await pw.chromium.launch_persistent_context(args.profile_dir, headless=False)
+                page = ctx.pages[0] if ctx.pages else await ctx.new_page()
+                await page.goto(args.url)
+                print(f"Persistent profile: {args.profile_dir}")
+                print("Log in to the site in the opened window, then CLOSE the browser to save "
+                      "the session into that profile. Reuse it later with --profile-dir.")
+                closed = asyncio.Event()
+                ctx.on("close", lambda *_: closed.set())
+                await closed.wait()
+            return 0
+        return asyncio.run(_login())
+
+    # Security Research Loop (real execution gated off for dry-run programs).
+    if args.cmd == "research":
+        from bbagent.browser import BrowserLaunchRefused, ensure_live_allowed
+        from bbagent.browser.playwright_backend import PlaywrightBackend
+        from bbagent.research import ResearchLimits, research_preflight, run_security_research
+        try:
+            program = ProgramManager.from_file(args.config)
+        except ProgramConfigError as exc:
+            print(f"error: {exc}", file=sys.stderr)
+            return 2
+
+        limits = ResearchLimits(max_rounds=args.max_rounds, max_seconds=args.max_seconds)
+
+        # Resolve seeds: explicit --seed values plus, if --seed-scope, one origin per
+        # configured in-scope web asset (never a wildcard; scope engine unchanged).
+        seeds = list(args.seed or [])
+        if args.seed_scope:
+            from bbagent.browser import seed_origins_from_scope
+            for o in seed_origins_from_scope(program):
+                if o not in seeds:
+                    seeds.append(o)
+
+        # Preflight: readiness checks only. No navigation, no target traffic.
+        if args.preflight:
+            report = research_preflight(
+                program, seed_urls=seeds, limits=limits,
+                live=bool(args.live), identity=args.identity)
+            print(json.dumps(report.__dict__, indent=2, default=lambda o: o.__dict__)
+                  if args.json else report.render())
+            return 0 if report.ready else 1
+        if not seeds:
+            print("error: provide --seed URL(s) and/or --seed-scope", file=sys.stderr)
+            return 2
+
+        live = bool(args.live) and os.getenv("BBAGENT_BROWSER_LIVE") == "1"
+        try:
+            ensure_live_allowed(program, live=live)
+        except BrowserLaunchRefused as exc:
+            print(str(exc), file=sys.stderr)
+            return 2
+        db = Database(db_path)
+        evidence = EvidenceStore(db, _evidence_dir())
+
+        async def _do_research() -> int:
+            backend = _make_browser_backend(args.profile_dir, headless=not args.headed)
+            limits = ResearchLimits(max_rounds=args.max_rounds, max_seconds=args.max_seconds)
+            report = await run_security_research(
+                program, db, evidence, browser_backend=backend, seed_urls=seeds,
+                identity=args.identity, limits=limits, live=live)
+            print(json.dumps(report.__dict__, indent=2, default=str) if args.json else report.render())
+            return 0
+        try:
+            return asyncio.run(_do_research())
+        finally:
+            db.close()
 
     # Autonomous run.
     if args.cmd == "autorun":

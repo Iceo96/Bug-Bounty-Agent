@@ -103,6 +103,7 @@ class IDORVerifier(Verifier):
         if len(accounts) < 2:
             return VerificationResult(
                 verified=False,
+                inconclusive=True,   # missing prerequisite, not a disproof
                 reason=("INCONCLUSIVE / NEEDS_HUMAN_REVIEW: IDOR requires two authorized "
                         f"test identities; only {len(accounts)} configured"),
             )
